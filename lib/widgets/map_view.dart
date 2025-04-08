@@ -5,6 +5,43 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:math';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
+
+class CustomTileProvider extends TileProvider {
+  final String urlTemplate;
+  final Directory cacheDir;
+  final Map<String, File> tileCache = {};
+
+  CustomTileProvider(this.urlTemplate, this.cacheDir);
+
+  @override
+  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
+    final url = urlTemplate
+        .replaceAll('{z}', coordinates.z.toString())
+        .replaceAll('{x}', coordinates.x.toString())
+        .replaceAll('{y}', coordinates.y.toString());
+
+    final fileName = '${coordinates.z}_${coordinates.x}_${coordinates.y}.png';
+    final file = File('${cacheDir.path}/map_tiles/$fileName');
+
+    if (file.existsSync()) {
+      return FileImage(file);
+    }
+
+    return NetworkImage(url)..evict().then((_) async {
+      try {
+        final response = await http.get(Uri.parse(url));
+        if (response.statusCode == 200) {
+          await file.writeAsBytes(response.bodyBytes);
+        }
+      } catch (e) {
+        debugPrint('Error caching tile: $e');
+      }
+    });
+  }
+}
 
 class MapView extends StatefulWidget {
   const MapView({super.key});
@@ -20,11 +57,37 @@ class _MapViewState extends State<MapView> {
   bool _isSatelliteView = false;
   LatLng? _currentLocation;
   bool _isLoading = false;
+  late Directory _cacheDir;
+  CustomTileProvider? _tileProvider;
+  CustomTileProvider? _satelliteTileProvider;
 
   @override
   void initState() {
     super.initState();
+    _initializeCache();
     _requestLocationPermission();
+  }
+
+  Future<void> _initializeCache() async {
+    try {
+      _cacheDir = await getTemporaryDirectory();
+      final cachePath = '${_cacheDir.path}/map_tiles';
+      await Directory(cachePath).create(recursive: true);
+
+      _tileProvider = CustomTileProvider(
+        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        _cacheDir,
+      );
+
+      _satelliteTileProvider = CustomTileProvider(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        _cacheDir,
+      );
+
+      setState(() {});
+    } catch (e) {
+      debugPrint('Error initializing cache: $e');
+    }
   }
 
   Future<void> _requestLocationPermission() async {
@@ -65,6 +128,10 @@ class _MapViewState extends State<MapView> {
 
   @override
   Widget build(BuildContext context) {
+    if (_tileProvider == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return Stack(
       children: [
         FlutterMap(
@@ -91,19 +158,20 @@ class _MapViewState extends State<MapView> {
                   : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.example.agron_gcs',
               maxZoom: 19,
+              tileProvider: _isSatelliteView ? _satelliteTileProvider! : _tileProvider!,
             ),
             CurrentLocationLayer(
               positionStream: const LocationMarkerDataStreamFactory().fromGeolocatorPositionStream(),
               style: const LocationMarkerStyle(
                 marker: DefaultLocationMarker(
-                  color: Colors.green,
+                  color: Colors.blue,
                   child: Icon(
                     Icons.location_on,
                     color: Colors.white,
                   ),
                 ),
                 markerSize: Size(40, 40),
-                accuracyCircleColor: Colors.green,
+                accuracyCircleColor: Colors.blue,
               ),
             ),
             if (_points.isNotEmpty) ...[
@@ -164,107 +232,6 @@ class _MapViewState extends State<MapView> {
             ],
           ],
         ),
-        // Top Action Buttons
-        Positioned(
-          top: 10,
-          left: 16,
-          right: 16,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              if (_isDrawing)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Drawing Mode',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 8),
-                        Text('Points: ${_points.length}'),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            ElevatedButton(
-                              onPressed: () {
-                                if (_points.length >= 3) {
-                                  setState(() {
-                                    _isDrawing = false;
-                                  });
-                                  _showFieldSummary();
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Add at least 3 points to complete the field'),
-                                    ),
-                                  );
-                                }
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                              ),
-                              child: const Text('Finish'),
-                            ),
-                            const SizedBox(width: 8),
-                            ElevatedButton(
-                              onPressed: _undoLastPoint,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.orange,
-                              ),
-                              child: const Text('Undo'),
-                            ),
-                            const SizedBox(width: 8),
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  _points.clear();
-                                  _isDrawing = false;
-                                });
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red,
-                              ),
-                              child: const Text('Clear'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              // Row(
-              //   mainAxisSize: MainAxisSize.min,
-              //   children: [
-              //     ElevatedButton(
-              //       onPressed: () {
-              //         // Plan Mission logic
-              //       },
-              //       style: ElevatedButton.styleFrom(
-              //         backgroundColor: Colors.green,
-              //         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              //       ),
-              //       child: const Text('Plan Mission'),
-              //     ),
-              //     const SizedBox(width: 8),
-              //     ElevatedButton(
-              //       onPressed: () {
-              //         // Emergency Return logic
-              //       },
-              //       style: ElevatedButton.styleFrom(
-              //         backgroundColor: Colors.red,
-              //         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              //       ),
-              //       child: const Text('Emergency Return'),
-              //     ),
-              //   ],
-              // ),
-            ],
-          ),
-        ),
-        // Map Controls
         Positioned(
           top: 10,
           right: 12,
