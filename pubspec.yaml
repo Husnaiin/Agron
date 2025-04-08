@@ -10,7 +10,10 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.2
-  google_maps_flutter: ^2.5.0
+  flutter_map: ^6.1.0
+  flutter_map_location_marker: ^8.0.2
+  geolocator: ^10.1.0
+  latlong2: ^0.9.0
   provider: ^6.0.5
   shared_preferences: ^2.2.0
   http: ^1.1.0
@@ -19,6 +22,7 @@ dependencies:
   sqflite: ^2.3.0
   flutter_secure_storage: ^9.0.0
   intl: ^0.18.1
+  permission_handler: ^11.0.1
 
 dev_dependencies:
   flutter_test:
@@ -26,7 +30,4 @@ dev_dependencies:
   flutter_lints: ^2.0.0
 
 flutter:
-  uses-material-design: true
-  assets:
-    - assets/images/
-    - assets/icons/ 
+  uses-material-design: true 
