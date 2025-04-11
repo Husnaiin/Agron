@@ -24,11 +24,25 @@ dependencies:
   intl: ^0.18.1
   permission_handler: ^11.0.1
   cached_network_image: ^3.3.1
+  flutter_svg: ^2.0.9
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
-  uses-material-design: true 
+  uses-material-design: true
+  assets:
+    - AgronLogos/ 
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  adaptive:
+    android: true
+    ios: true
+    foreground_image: "assets/icon/app_icon_foreground.png"
+    background_color: "#FFFFFF" 

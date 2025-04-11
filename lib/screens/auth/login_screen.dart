@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:agron_gcs/providers/auth_provider.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -64,8 +65,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    SvgPicture.asset(
+                      'AgronLogos/Drone-logo.svg',
+                      width: 120,
+                      height: 120,
+                    ),
+                    const SizedBox(height: 24),
                     const Text(
-                      'Agron GCS',
+                      'Agron Ground Control Station',
                       style: TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.bold,

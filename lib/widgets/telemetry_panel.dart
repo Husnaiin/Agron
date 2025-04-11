@@ -1,57 +1,71 @@
 import 'package:flutter/material.dart';
+import '../services/drone_service.dart';
+import '../models/telemetry.dart';
 
 class TelemetryPanel extends StatelessWidget {
-  const TelemetryPanel({super.key});
+  final DroneService droneService;
+
+  const TelemetryPanel({
+    super.key,
+    required this.droneService,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(26),
-            blurRadius: 4,
-            offset: const Offset(0, -2),
+    return StreamBuilder<Telemetry>(
+      stream: droneService.telemetryStream,
+      builder: (context, snapshot) {
+        final telemetry = snapshot.data;
+        
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(26),
+                blurRadius: 4,
+                offset: const Offset(0, -2),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildTelemetryItem(
-            context,
-            Icons.speed,
-            'Speed',
-            '0 m/s',
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildTelemetryItem(
+                context,
+                Icons.speed,
+                'Speed',
+                telemetry != null ? '${telemetry.speed.toStringAsFixed(1)} m/s' : '--',
+              ),
+              _buildTelemetryItem(
+                context,
+                Icons.height,
+                'Altitude',
+                telemetry != null ? '${telemetry.altitude.toStringAsFixed(1)} m' : '--',
+              ),
+              _buildTelemetryItem(
+                context,
+                Icons.battery_full,
+                'Battery',
+                telemetry != null ? '${telemetry.batteryPercentage}%' : '--',
+              ),
+              _buildTelemetryItem(
+                context,
+                Icons.water_drop,
+                'Spray',
+                telemetry != null ? '${telemetry.sprayLevel}%' : '--',
+              ),
+              _buildTelemetryItem(
+                context,
+                Icons.area_chart,
+                'Progress',
+                telemetry != null ? '${telemetry.missionProgress}%' : '--',
+              ),
+            ],
           ),
-          _buildTelemetryItem(
-            context,
-            Icons.height,
-            'Altitude',
-            '0 m',
-          ),
-          _buildTelemetryItem(
-            context,
-            Icons.battery_full,
-            'Battery',
-            '100%',
-          ),
-          _buildTelemetryItem(
-            context,
-            Icons.water_drop,
-            'Spray Fluid',
-            '100%',
-          ),
-          _buildTelemetryItem(
-            context,
-            Icons.area_chart,
-            'Progress',
-            '0%',
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 

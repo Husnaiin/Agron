@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../services/drone_service.dart';
+import 'emergency_puzzle.dart';
 
 class MissionControls extends StatefulWidget {
   const MissionControls({super.key});
@@ -10,9 +13,12 @@ class MissionControls extends StatefulWidget {
 class _MissionControlsState extends State<MissionControls> {
   String _selectedMissionType = 'inspection';
   bool _isMissionActive = false;
+  bool _isPaused = false;
 
   @override
   Widget build(BuildContext context) {
+    final droneService = context.read<DroneService>();
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -47,7 +53,7 @@ class _MissionControlsState extends State<MissionControls> {
                       child: Text('Spraying'),
                     ),
                   ],
-                  onChanged: (value) {
+                  onChanged: _isMissionActive ? null : (value) {
                     if (value != null) {
                       setState(() => _selectedMissionType = value);
                     }
@@ -56,7 +62,7 @@ class _MissionControlsState extends State<MissionControls> {
               ),
               const SizedBox(width: 16),
               ElevatedButton(
-                onPressed: _isMissionActive ? null : _startMission,
+                onPressed: _isMissionActive ? null : () => _startMission(droneService),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
                   padding: const EdgeInsets.symmetric(
@@ -74,15 +80,15 @@ class _MissionControlsState extends State<MissionControls> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 ElevatedButton(
-                  onPressed: _pauseMission,
+                  onPressed: () => _togglePause(droneService),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
+                    backgroundColor: _isPaused ? Colors.green : Colors.orange,
                   ),
-                  child: const Text('Pause'),
+                  child: Text(_isPaused ? 'Resume' : 'Pause'),
                 ),
                 const SizedBox(width: 16),
                 ElevatedButton(
-                  onPressed: _stopMission,
+                  onPressed: () => _showEmergencyPuzzle(droneService),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
                   ),
@@ -96,18 +102,56 @@ class _MissionControlsState extends State<MissionControls> {
     );
   }
 
-  void _startMission() {
-    setState(() => _isMissionActive = true);
-    // TODO: Implement mission start logic
+  Future<void> _startMission(DroneService droneService) async {
+    final mission = droneService.currentMission;
+    if (mission == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please save a mission first using the save button in the map controls')),
+      );
+      return;
+    }
+
+    try {
+      setState(() => _isMissionActive = true);
+      await droneService.startMission(mission);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Mission started successfully')),
+      );
+    } catch (e) {
+      setState(() => _isMissionActive = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to start mission: $e')),
+      );
+    }
   }
 
-  void _pauseMission() {
-    setState(() => _isMissionActive = false);
-    // TODO: Implement mission pause logic
+  Future<void> _togglePause(DroneService droneService) async {
+    if (_isPaused) {
+      await droneService.resumeMission();
+    } else {
+      await droneService.pauseMission();
+    }
+    setState(() => _isPaused = !_isPaused);
   }
 
-  void _stopMission() {
-    setState(() => _isMissionActive = false);
-    // TODO: Implement mission stop logic
+  void _showEmergencyPuzzle(DroneService droneService) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => EmergencyPuzzle(
+        onPuzzleSolved: () async {
+          await _stopMission(droneService);
+          Navigator.of(dialogContext).pop(); // Close the puzzle dialog
+        },
+      ),
+    );
+  }
+
+  Future<void> _stopMission(DroneService droneService) async {
+    await droneService.stopMission();
+    setState(() {
+      _isMissionActive = false;
+      _isPaused = false;
+    });
   }
 } 

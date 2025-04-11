@@ -4,17 +4,25 @@ import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 import 'dart:math';
 import 'dart:io';
+import 'dart:async';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
+import '../services/drone_service.dart';
+import '../services/mission_storage.dart';
+import '../models/mission.dart';
+import '../models/telemetry.dart';
+import 'emergency_puzzle.dart';
 
 class CustomTileProvider extends TileProvider {
   final String urlTemplate;
   final Directory cacheDir;
   final Map<String, File> tileCache = {};
+  final String mapType;
 
-  CustomTileProvider(this.urlTemplate, this.cacheDir);
+  CustomTileProvider(this.urlTemplate, this.cacheDir, {this.mapType = 'standard'});
 
   @override
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
@@ -23,7 +31,7 @@ class CustomTileProvider extends TileProvider {
         .replaceAll('{x}', coordinates.x.toString())
         .replaceAll('{y}', coordinates.y.toString());
 
-    final fileName = '${coordinates.z}_${coordinates.x}_${coordinates.y}.png';
+    final fileName = '${mapType}_${coordinates.z}_${coordinates.x}_${coordinates.y}.png';
     final file = File('${cacheDir.path}/map_tiles/$fileName');
 
     if (file.existsSync()) {
@@ -53,13 +61,52 @@ class MapView extends StatefulWidget {
 class _MapViewState extends State<MapView> {
   final MapController _mapController = MapController();
   final List<LatLng> _points = [];
+  late final DroneService _droneService;
+  final MissionStorage _missionStorage = MissionStorage();
+  
+  // Default mission parameters
+  static const double defaultAltitude = 30.0; // meters
+  static const double defaultSprayRate = 2.0; // liters per minute
+  
   bool _isDrawing = false;
   bool _isSatelliteView = false;
+  bool _isConnected = false;
+  bool _isMissionActive = false;
   LatLng? _currentLocation;
+  LatLng? _droneLocation;
   bool _isLoading = false;
+  Telemetry? _lastTelemetry;
   late Directory _cacheDir;
   CustomTileProvider? _tileProvider;
   CustomTileProvider? _satelliteTileProvider;
+  StreamSubscription<Telemetry>? _telemetrySubscription;
+  Timer? _connectionTimer;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _droneService = Provider.of<DroneService>(context, listen: false);
+    _setupTelemetrySubscription();
+  }
+
+  void _setupTelemetrySubscription() {
+    _telemetrySubscription?.cancel();
+    _telemetrySubscription = _droneService.telemetryStream.listen((telemetry) {
+      setState(() {
+        _lastTelemetry = telemetry;
+        _droneLocation = LatLng(telemetry.latitude, telemetry.longitude);
+        _isConnected = true;
+      });
+    });
+
+    _connectionTimer?.cancel();
+    _connectionTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_lastTelemetry != null &&
+          DateTime.now().difference(_lastTelemetry!.timestamp).inSeconds > 10) {
+        setState(() => _isConnected = false);
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -77,11 +124,13 @@ class _MapViewState extends State<MapView> {
       _tileProvider = CustomTileProvider(
         'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
         _cacheDir,
+        mapType: 'standard',
       );
 
       _satelliteTileProvider = CustomTileProvider(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         _cacheDir,
+        mapType: 'satellite',
       );
 
       setState(() {});
@@ -116,6 +165,28 @@ class _MapViewState extends State<MapView> {
     setState(() {
       _isSatelliteView = !_isSatelliteView;
     });
+    
+    // Force map to refresh by moving to the same position
+    if (_currentLocation != null) {
+      final currentZoom = _mapController.zoom;
+      
+      // First move away from current position
+      _mapController.move(
+        LatLng(
+          _currentLocation!.latitude + 0.0001,
+          _currentLocation!.longitude + 0.0001
+        ),
+        currentZoom
+      );
+      
+      // Then move back to the original position after a short delay
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) {
+          _mapController.move(_currentLocation!, currentZoom);
+          setState(() {});
+        }
+      });
+    }
   }
 
   void _undoLastPoint() {
@@ -126,40 +197,114 @@ class _MapViewState extends State<MapView> {
     }
   }
 
+  Future<Mission?> _createMission() async {
+    if (_points.length < 3 || _currentLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please mark at least 3 points and ensure location is available')),
+      );
+      return null;
+    }
+
+    final mission = Mission(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: 'Mission ${DateTime.now().toString()}',
+      waypoints: _points.map((point) => MissionWaypoint(
+        position: point,
+        altitude: defaultAltitude,
+        sprayRate: defaultSprayRate,
+        sprayEnabled: true,
+      )).toList(),
+      defaultAltitude: defaultAltitude,
+      defaultSprayRate: defaultSprayRate,
+      createdAt: DateTime.now(),
+    );
+
+    try {
+      await _missionStorage.saveMission(mission);
+      return mission;
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save mission: $e')),
+      );
+      return null;
+    }
+  }
+
+  void _showEmergencyPuzzle() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => EmergencyPuzzle(
+        onPuzzleSolved: _triggerEmergencyReturn,
+      ),
+    );
+  }
+
+  Future<void> _triggerEmergencyReturn() async {
+    setState(() => _isLoading = true);
+    try {
+      await _droneService.triggerEmergencyReturn();
+      setState(() {
+        _isMissionActive = false;
+        _isDrawing = false;
+        _points.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Emergency return triggered')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to trigger emergency return: $e')),
+      );
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_tileProvider == null) {
+    if (_tileProvider == null || _satelliteTileProvider == null) {
       return const Center(child: CircularProgressIndicator());
     }
+
+    final isMissionActive = _droneService.isMissionActive;
 
     return Stack(
       children: [
         FlutterMap(
           mapController: _mapController,
           options: MapOptions(
-            initialCenter: _currentLocation ?? const LatLng(0, 0),
-            initialZoom: 3,
-            onTap: (tapPosition, point) {
-              if (_isDrawing) {
-                setState(() {
-                  _points.add(point);
-                });
-              }
-            },
-            interactionOptions: const InteractionOptions(
-              enableScrollWheel: true,
-              enableMultiFingerGestureRace: true,
-            ),
+            center: _currentLocation ?? const LatLng(0, 0),
+            zoom: 15,
+            onTap: _isDrawing ? _handleMapTap : null,
           ),
           children: [
             TileLayer(
               urlTemplate: _isSatelliteView
                   ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
                   : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.agron_gcs',
-              maxZoom: 19,
+              userAgentPackageName: 'com.agron.gcs',
               tileProvider: _isSatelliteView ? _satelliteTileProvider! : _tileProvider!,
+              maxZoom: 19,
             ),
+            if (_droneLocation != null)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: _droneLocation!,
+                    width: 40,
+                    height: 40,
+                    child: Transform.rotate(
+                      angle: _lastTelemetry?.speed ?? 0,
+                      child: const Icon(
+                        Icons.flight,
+                        color: Colors.blue,
+                        size: 40,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             CurrentLocationLayer(
               positionStream: const LocationMarkerDataStreamFactory().fromGeolocatorPositionStream(),
               style: const LocationMarkerStyle(
@@ -240,7 +385,7 @@ class _MapViewState extends State<MapView> {
               children: [
                 IconButton(
                   icon: Icon(_isDrawing ? Icons.edit_off : Icons.edit),
-                  onPressed: () {
+                  onPressed: isMissionActive ? null : () {
                     setState(() {
                       _isDrawing = !_isDrawing;
                       if (_isDrawing) {
@@ -249,17 +394,46 @@ class _MapViewState extends State<MapView> {
                     });
                   },
                   tooltip: _isDrawing ? 'Stop Drawing' : 'Start Drawing',
+                  color: _isDrawing ? Colors.blue : null,
                 ),
                 IconButton(
-                  icon: const Icon(Icons.layers),
+                  icon: Icon(
+                    Icons.layers,
+                    color: _isSatelliteView ? Colors.blue : null,
+                  ),
                   onPressed: _toggleSatelliteView,
-                  tooltip: 'Toggle Satellite View',
+                  tooltip: _isSatelliteView ? 'Switch to Map View' : 'Switch to Satellite View',
                 ),
                 IconButton(
                   icon: const Icon(Icons.my_location),
                   onPressed: _getCurrentLocation,
                   tooltip: 'My Location',
                 ),
+                if (_isDrawing && !isMissionActive) ...[
+                  IconButton(
+                    icon: const Icon(Icons.undo),
+                    onPressed: _points.isNotEmpty ? _undoLastPoint : null,
+                    tooltip: 'Undo Last Point',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.clear_all),
+                    onPressed: _points.isNotEmpty ? () {
+                      setState(() => _points.clear());
+                    } : null,
+                    tooltip: 'Clear All Points',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.info),
+                    onPressed: _points.length >= 3 ? _showFieldSummary : null,
+                    tooltip: 'Field Summary',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.save),
+                    onPressed: _points.length >= 3 ? () => _saveMission() : null,
+                    tooltip: 'Save Mission',
+                    color: _droneService.currentMission != null ? Colors.green : null,
+                  ),
+                ],
                 IconButton(
                   icon: const Icon(Icons.zoom_in),
                   onPressed: () {
@@ -323,6 +497,7 @@ class _MapViewState extends State<MapView> {
   void _showFieldSummary() {
     // Calculate area and perimeter
     double area = _calculateArea();
+    double acres = area / 4046.86; // Convert square meters to acres
     double perimeter = _calculatePerimeter();
 
     showDialog(
@@ -334,7 +509,7 @@ class _MapViewState extends State<MapView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Number of points: ${_points.length}'),
-            Text('Area: ${area.toStringAsFixed(2)} sq meters'),
+            Text('Area: ${area.toStringAsFixed(2)} m² (${acres.toStringAsFixed(2)} acres)'),
             Text('Perimeter: ${perimeter.toStringAsFixed(2)} meters'),
             const SizedBox(height: 16),
             const Text('Points:'),
@@ -402,8 +577,30 @@ class _MapViewState extends State<MapView> {
     return earthRadius * c;
   }
 
+  void _handleMapTap(TapPosition tapPosition, LatLng point) {
+    if (_isDrawing) {
+      setState(() {
+        _points.add(point);
+      });
+    }
+  }
+
+  Future<void> _saveMission() async {
+    final mission = await _createMission();
+    if (mission != null) {
+      _droneService.setMission(mission);
+      setState(() => _isDrawing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Mission saved successfully')),
+      );
+    }
+  }
+
   @override
   void dispose() {
+    _telemetrySubscription?.cancel();
+    _connectionTimer?.cancel();
+    _droneService.dispose();
     _mapController.dispose();
     super.dispose();
   }
