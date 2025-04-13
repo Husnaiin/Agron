@@ -6,12 +6,17 @@ import 'package:agron_gcs/widgets/map_view.dart';
 import 'package:agron_gcs/widgets/telemetry_panel.dart';
 import 'package:agron_gcs/widgets/mission_controls.dart';
 import 'package:agron_gcs/services/drone_service.dart';
+import 'package:agron_gcs/screens/mission_screen.dart';
+import 'package:agron_gcs/screens/auth/login_screen.dart';
+import 'package:agron_gcs/theme/app_theme.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final droneService = Provider.of<DroneService>(context);
+    
     return WillPopScope(
       onWillPop: () async => false, // Prevent back button navigation
       child: Scaffold(
@@ -39,6 +44,29 @@ class HomeScreen extends StatelessWidget {
               backgroundColor: Colors.transparent,
               elevation: 0,
               actions: [
+                // Connection status indicator
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: droneService.isConnected 
+                        ? Colors.green 
+                        : (droneService.isConnecting ? Colors.orange : Colors.red),
+                  ),
+                ),
+                // Connect button
+                IconButton(
+                  icon: Icon(
+                    Icons.wifi,
+                    color: Theme.of(context).brightness == Brightness.light
+                        ? Colors.black
+                        : Colors.white,
+                  ),
+                  onPressed: () => _showConnectionDialog(context, droneService),
+                  tooltip: 'Connect to Drone',
+                ),
                 IconButton(
                   icon: Icon(
                     Icons.history,
@@ -46,7 +74,12 @@ class HomeScreen extends StatelessWidget {
                         ? Colors.black
                         : Colors.white,
                   ),
-                  onPressed: () => Navigator.pushNamed(context, '/missions'),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const MissionScreen()),
+                    );
+                  },
                   tooltip: 'Mission History',
                 ),
                 IconButton(
@@ -57,8 +90,11 @@ class HomeScreen extends StatelessWidget {
                         : Colors.white,
                   ),
                   onPressed: () {
-                    context.read<AuthProvider>().logout();
-                    Navigator.pushReplacementNamed(context, '/login');
+                    Provider.of<AuthProvider>(context, listen: false).logout();
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (context) => const LoginScreen()),
+                    );
                   },
                   tooltip: 'Logout',
                 ),
@@ -98,18 +134,67 @@ class HomeScreen extends StatelessWidget {
                       //   //     ),
                       //   //   ],
                       //   // ),
-                      // ),
                     ),
                   ),
                 ],
               ),
             ),
             TelemetryPanel(
-              droneService: context.read<DroneService>(),
+              droneService: droneService,
             ),
             const MissionControls(),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showConnectionDialog(BuildContext context, DroneService droneService) {
+    final TextEditingController ipController = TextEditingController(
+      text: droneService.baseUrl.replaceAll('http://', '').replaceAll(':5000', '')
+    );
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Connect to Drone'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ipController,
+              decoration: const InputDecoration(
+                labelText: 'Raspberry Pi IP Address',
+                hintText: 'e.g., 192.168.1.100',
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            if (droneService.connectionError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Text(
+                  droneService.connectionError!,
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final ip = ipController.text.trim();
+              if (ip.isNotEmpty) {
+                droneService.connectToDrone(ip);
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Connect'),
+          ),
+        ],
       ),
     );
   }

@@ -14,19 +14,34 @@ class MissionWaypoint {
   });
 
   Map<String, dynamic> toJson() => {
-    'latitude': position.latitude,
-    'longitude': position.longitude,
+    'position': {
+      'latitude': position.latitude,
+      'longitude': position.longitude,
+    },
     'altitude': altitude,
     'sprayRate': sprayRate,
     'sprayEnabled': sprayEnabled,
   };
 
-  factory MissionWaypoint.fromJson(Map<String, dynamic> json) => MissionWaypoint(
-    position: LatLng(json['latitude'] as double, json['longitude'] as double),
-    altitude: json['altitude'] as double,
-    sprayRate: json['sprayRate'] as double,
-    sprayEnabled: json['sprayEnabled'] as bool,
-  );
+  factory MissionWaypoint.fromJson(Map<String, dynamic> json) {
+    // Handle both formats (with position object or direct lat/lng)
+    double lat, lng;
+    
+    if (json.containsKey('position')) {
+      lat = json['position']['latitude'] as double;
+      lng = json['position']['longitude'] as double;
+    } else {
+      lat = json['latitude'] as double;
+      lng = json['longitude'] as double;
+    }
+    
+    return MissionWaypoint(
+      position: LatLng(lat, lng),
+      altitude: json['altitude'] as double,
+      sprayRate: json['sprayRate'] as double,
+      sprayEnabled: json['sprayEnabled'] as bool,
+    );
+  }
 }
 
 class Mission {

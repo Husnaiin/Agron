@@ -21,13 +21,12 @@ class MyApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
-        Provider<DroneService>(
+        ChangeNotifierProvider<DroneService>(
           create: (_) {
             final service = DroneService();
             service.initialize();
             return service;
           },
-          dispose: (_, service) => service.dispose(),
         ),
       ],
       child: MaterialApp(
