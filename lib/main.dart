@@ -7,6 +7,7 @@ import 'package:agron_gcs/screens/mission_screen.dart';
 import 'package:agron_gcs/providers/auth_provider.dart';
 import 'package:agron_gcs/services/drone_service.dart';
 import 'package:agron_gcs/theme/app_theme.dart';
+import 'package:agron_gcs/screens/chat_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,6 +40,7 @@ class MyApp extends StatelessWidget {
           '/login': (context) => const LoginScreen(),
           '/home': (context) => const HomeScreen(),
           '/missions': (context) => const MissionScreen(),
+          '/chat': (context) => const ChatScreen(),
         },
         debugShowCheckedModeBanner: false,
       ),
@@ -114,7 +116,8 @@ class AuthWrapper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<bool>(
-      future: Provider.of<AuthProvider>(context, listen: false).checkAuthStatus(),
+      future:
+          Provider.of<AuthProvider>(context, listen: false).checkAuthStatus(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
@@ -123,15 +126,15 @@ class AuthWrapper extends StatelessWidget {
             ),
           );
         }
-        
+
         // If we get an error, or no data, or not authenticated, show login
         if (snapshot.hasError || !snapshot.hasData || !snapshot.data!) {
           return const LoginScreen();
         }
-        
+
         // If authenticated, show home screen
         return const HomeScreen();
       },
     );
   }
-} 
+}

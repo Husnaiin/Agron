@@ -25,6 +25,8 @@ dependencies:
   permission_handler: ^11.0.1
   cached_network_image: ^3.3.1
   flutter_svg: ^2.0.9
+  record: ^6.0.0
+  web_socket_channel: ^2.4.0
 
 dev_dependencies:
   flutter_test:

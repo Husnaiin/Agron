@@ -5,13 +5,17 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:flutter/foundation.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/telemetry.dart';
 import '../models/mission.dart';
 
 class DroneService extends ChangeNotifier {
-  static const String defaultBaseUrl = 'http://192.168.4.1:5000'; // Default Raspberry Pi hotspot IP
+  static const String defaultBaseUrl =
+      'http://192.168.4.1:5000'; // Default Raspberry Pi hotspot IP
   String _baseUrl = defaultBaseUrl;
   IO.Socket? socket;
+  WebSocketChannel? _wsChannel;
+  StreamSubscription? _wsSubscription;
   final _random = Random();
   Timer? _telemetryTimer;
   final _telemetryController = StreamController<Telemetry>.broadcast();
@@ -26,7 +30,7 @@ class DroneService extends ChangeNotifier {
   bool _isConnecting = false;
   String? _connectionError;
   Timer? _reconnectTimer;
-  
+
   // Mock values for demonstration (used only when not connected to Pi)
   double _altitude = 0;
   double _speed = 0;
@@ -59,38 +63,45 @@ class DroneService extends ChangeNotifier {
 
   Future<void> connectToDrone(String ipAddress) async {
     if (_isConnecting) return;
-    
+
     // Cancel any existing reconnect timer
     _reconnectTimer?.cancel();
-    
+
     _isConnecting = true;
     _connectionError = null;
     notifyListeners();
-    
+
     try {
       // Update base URL with the provided IP address
       _baseUrl = 'http://$ipAddress:5000';
       debugPrint('Attempting to connect to drone at $_baseUrl');
-      
+
       // Test connection with a simple HTTP request
       debugPrint('Testing HTTP connection...');
-      final response = await http.get(Uri.parse('$_baseUrl/status'))
+      final response = await http
+          .get(Uri.parse('$_baseUrl/status'))
           .timeout(const Duration(seconds: 5));
-      
+
       debugPrint('HTTP response status: ${response.statusCode}');
       debugPrint('HTTP response body: ${response.body}');
-      
+
       if (response.statusCode != 200) {
         throw Exception('Failed to connect to drone: ${response.statusCode}');
       }
-      
+
       // Disconnect existing socket if any
       if (socket != null) {
         debugPrint('Disconnecting existing socket');
         socket!.disconnect();
         socket = null;
       }
-      
+
+      // Disconnect any existing WS telemetry channel
+      await _wsSubscription?.cancel();
+      _wsSubscription = null;
+      await _wsChannel?.sink.close();
+      _wsChannel = null;
+
       // Initialize socket connection with more robust options
       debugPrint('Initializing socket connection...');
       socket = IO.io(_baseUrl, <String, dynamic>{
@@ -102,20 +113,20 @@ class DroneService extends ChangeNotifier {
         'reconnectionDelayMax': 5000,
         'timeout': 20000,
       });
-      
+
       // Set up socket listeners
       _setupSocketListeners();
-      
+
       // Wait for connection to establish or timeout
       debugPrint('Waiting for socket connection to establish...');
       await Future.delayed(const Duration(seconds: 5));
-      
+
       if (!_isConnected) {
         throw Exception('Connection timeout');
       }
-      
+
       debugPrint('Successfully connected to drone at $_baseUrl');
-      
+
       // Initialize mock telemetry values
       _batteryPercentage = 100;
       _sprayLevel = 100;
@@ -125,7 +136,7 @@ class DroneService extends ChangeNotifier {
       _connectionError = e.toString();
       notifyListeners();
       debugPrint('Error connecting to drone: $e');
-      
+
       // Attempt to reconnect after a delay
       _reconnectTimer?.cancel();
       _reconnectTimer = Timer(const Duration(seconds: 5), () {
@@ -137,6 +148,76 @@ class DroneService extends ChangeNotifier {
     }
   }
 
+  Future<void> connectToTelemetryWs(String ipAddress) async {
+    if (_isConnecting) return;
+
+    _isConnecting = true;
+    _connectionError = null;
+    notifyListeners();
+
+    try {
+      // Close any existing connections (socket.io or WS)
+      if (socket != null) {
+        socket!.disconnect();
+        socket = null;
+      }
+      await _wsSubscription?.cancel();
+      _wsSubscription = null;
+      await _wsChannel?.sink.close();
+      _wsChannel = null;
+
+      final uri = Uri.parse('ws://$ipAddress:5001/ws/telemetry');
+      debugPrint('Connecting to WS telemetry at $uri');
+      _wsChannel = WebSocketChannel.connect(uri);
+
+      _wsSubscription = _wsChannel!.stream.listen((message) {
+        try {
+          Map<String, dynamic> telemetryData;
+          if (message is String) {
+            telemetryData = json.decode(message) as Map<String, dynamic>;
+          } else if (message is Map) {
+            telemetryData = Map<String, dynamic>.from(message);
+          } else {
+            debugPrint('Unexpected WS telemetry type: ${message.runtimeType}');
+            return;
+          }
+
+          final telemetry = Telemetry.fromJson(telemetryData);
+          _telemetryController.add(telemetry);
+          notifyListeners();
+          debugPrint('WS telemetry received: $telemetryData');
+        } catch (e, st) {
+          debugPrint('Error processing WS telemetry: $e');
+          debugPrint('Stack trace: $st');
+        }
+      }, onDone: () {
+        _isConnected = false;
+        _isConnecting = false;
+        notifyListeners();
+        debugPrint('WS telemetry connection closed');
+      }, onError: (error) {
+        _isConnected = false;
+        _isConnecting = false;
+        _connectionError = 'WS error: $error';
+        notifyListeners();
+        debugPrint('WS telemetry error: $error');
+      });
+
+      _baseUrl = 'ws://$ipAddress:5001';
+      _isConnected = true;
+      _isConnecting = false;
+      _connectionError = null;
+      notifyListeners();
+      debugPrint('Connected to WS telemetry at $uri');
+    } catch (e) {
+      _isConnected = false;
+      _isConnecting = false;
+      _connectionError = e.toString();
+      notifyListeners();
+      debugPrint('Error connecting to WS telemetry: $e');
+    }
+  }
+
   void _setupSocketListeners() {
     socket!.onConnect((_) {
       _isConnected = true;
@@ -144,10 +225,10 @@ class DroneService extends ChangeNotifier {
       _connectionError = null;
       notifyListeners();
       debugPrint('Socket connected to drone at $_baseUrl');
-      
+
       // Cancel any reconnect timer
       _reconnectTimer?.cancel();
-      
+
       // Send a test message to verify connection
       socket!.emit('test_connection', {'client': 'flutter_app'});
     });
@@ -157,7 +238,7 @@ class DroneService extends ChangeNotifier {
       _isConnecting = false;
       notifyListeners();
       debugPrint('Socket disconnected from drone');
-      
+
       // Attempt to reconnect after a delay
       _reconnectTimer?.cancel();
       _reconnectTimer = Timer(const Duration(seconds: 5), () {
@@ -202,13 +283,13 @@ class DroneService extends ChangeNotifier {
             debugPrint('Unexpected telemetry data type: ${data.runtimeType}');
             return;
           }
-          
+
           debugPrint('Parsed telemetry data: $telemetryData');
-          
+
           final telemetry = Telemetry.fromJson(telemetryData);
           _telemetryController.add(telemetry);
           notifyListeners();
-          
+
           // Print detailed telemetry data
           debugPrint('''
 === TELEMETRY UPDATE ===
@@ -240,12 +321,17 @@ Timestamp: ${telemetry.timestamp}
   Future<void> disconnectFromDrone() async {
     // Cancel any reconnect timer
     _reconnectTimer?.cancel();
-    
+
     if (socket != null) {
       socket!.disconnect();
       socket = null;
     }
-    
+
+    await _wsSubscription?.cancel();
+    _wsSubscription = null;
+    await _wsChannel?.sink.close();
+    _wsChannel = null;
+
     _isConnected = false;
     _isConnecting = false;
     _connectionError = null;
@@ -255,12 +341,12 @@ Timestamp: ${telemetry.timestamp}
 
   Future<void> startMission(Mission? mission) async {
     if (!_isInitialized) throw Exception('DroneService not initialized');
-    
+
     final missionToStart = mission ?? _currentMission;
     if (missionToStart == null || missionToStart.waypoints.isEmpty) {
       throw Exception('No valid mission available');
     }
-    
+
     _currentMission = missionToStart;
     _waypointIndex = 0;
     _missionProgress = 0;
@@ -268,36 +354,41 @@ Timestamp: ${telemetry.timestamp}
     _longitude = missionToStart.waypoints.first.position.longitude;
     _isMissionActive = true;
 
-    // Only send mission data if connected to Pi
-    if (_isConnected && socket != null) {
-      debugPrint('Starting mission with waypoints: ${missionToStart.waypoints.length}');
-      
+    // Start mission if connected to either Socket.IO server or WS telemetry server
+    if (_isConnected && (socket != null || _wsChannel != null)) {
+      debugPrint(
+          'Starting mission with waypoints: ${missionToStart.waypoints.length}');
+
       // Convert mission to JSON and print for debugging
       final missionJson = missionToStart.toJson();
       debugPrint('Mission JSON: ${json.encode(missionJson)}');
-      
+
       // Print first waypoint for debugging
       if (missionToStart.waypoints.isNotEmpty) {
         final firstWaypoint = missionToStart.waypoints.first;
         debugPrint('First waypoint: ${json.encode(firstWaypoint.toJson())}');
       }
-      
-      // Send mission data to server
-      debugPrint('Emitting start_mission event...');
-      socket!.emit('start_mission', missionJson);
-      
-      // Wait for mission status confirmation
-      await Future.delayed(const Duration(seconds: 2));
-      
-      if (!_isMissionActive) {
-        debugPrint('Mission failed to start');
-        throw Exception('Mission failed to start');
+
+      if (socket != null) {
+        // Send mission data to Socket.IO server
+        debugPrint('Emitting start_mission event...');
+        socket!.emit('start_mission', missionJson);
+
+        // Wait for mission status confirmation
+        await Future.delayed(const Duration(seconds: 2));
+
+        if (!_isMissionActive) {
+          debugPrint('Mission failed to start');
+          throw Exception('Mission failed to start');
+        }
+
+        debugPrint('Mission started successfully');
+        _startMockTelemetry();
+      } else {
+        // WS telemetry only: locally start mock telemetry without server command
+        debugPrint('Starting mission (WS telemetry only, no server command)');
+        _startMockTelemetry();
       }
-      
-      debugPrint('Mission started successfully');
-      
-      // Start mock telemetry timer regardless of connection status
-      _startMockTelemetry();
     } else {
       // Don't start mock telemetry if not connected
       debugPrint('Cannot start mission: Not connected to drone');
@@ -309,50 +400,50 @@ Timestamp: ${telemetry.timestamp}
   void _startMockTelemetry() {
     // Cancel any existing telemetry timer
     _telemetryTimer?.cancel();
-    
+
     // Start a new telemetry timer
     _telemetryTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!_isMissionActive) {
         timer.cancel();
         return;
       }
-      
+
       _updateMockTelemetry();
     });
   }
 
   void _updateMockTelemetry() {
     if (!_isMissionActive || _currentMission == null) return;
-    
+
     // Update position based on waypoints
     final waypoints = _currentMission!.waypoints;
     if (waypoints.isEmpty) return;
-    
+
     // Calculate total distance and progress
     final totalWaypoints = waypoints.length;
     final progressPerWaypoint = 100 / totalWaypoints;
-    
+
     // Move towards current waypoint
     final currentWaypoint = waypoints[_waypointIndex];
     final targetLat = currentWaypoint.position.latitude;
     final targetLng = currentWaypoint.position.longitude;
-    
+
     // Calculate distance to target
     final latDiff = targetLat - _latitude;
     final lngDiff = targetLng - _longitude;
     final distance = sqrt(latDiff * latDiff + lngDiff * lngDiff);
-    
+
     // Move towards target (1% of remaining distance)
     if (distance > 0.00001) {
       _latitude += latDiff * 0.01;
       _longitude += lngDiff * 0.01;
-      
+
       // Calculate heading based on movement direction
       _heading = (atan2(lngDiff, latDiff) * 180 / pi) % 360;
     } else {
       // Reached current waypoint, move to next
       _waypointIndex = min(_waypointIndex + 1, totalWaypoints - 1);
-      
+
       // If reached last waypoint, complete mission
       if (_waypointIndex >= totalWaypoints - 1) {
         _isMissionActive = false;
@@ -361,16 +452,16 @@ Timestamp: ${telemetry.timestamp}
         return;
       }
     }
-    
+
     // Update other telemetry values
     _altitude = 30 + _random.nextDouble() * 4 - 2; // 28-32m
     _speed = 5 + _random.nextDouble() * 2 - 1; // 4-7 m/s
     _batteryPercentage = max(0, _batteryPercentage - _random.nextInt(2));
     _sprayLevel = max(0, _sprayLevel - _random.nextInt(2));
-    
+
     // Update mission progress
     _missionProgress = min(100, (_waypointIndex * progressPerWaypoint).round());
-    
+
     // Create telemetry data
     final telemetry = Telemetry(
       latitude: _latitude,
@@ -383,11 +474,11 @@ Timestamp: ${telemetry.timestamp}
       missionProgress: _missionProgress,
       timestamp: DateTime.now(),
     );
-    
+
     // Add telemetry to stream
     _telemetryController.add(telemetry);
     notifyListeners();
-    
+
     // Print telemetry data to terminal
     debugPrint('''
 === MOCK TELEMETRY UPDATE ===
@@ -408,7 +499,7 @@ Timestamp: ${telemetry.timestamp}
       debugPrint('Pausing mission');
       socket!.emit('pause_mission');
     }
-    
+
     // Pause mock telemetry
     _telemetryTimer?.cancel();
     _isMissionActive = false;
@@ -420,7 +511,7 @@ Timestamp: ${telemetry.timestamp}
       debugPrint('Resuming mission');
       socket!.emit('resume_mission');
     }
-    
+
     // Resume mock telemetry
     _isMissionActive = true;
     _startMockTelemetry();
@@ -432,14 +523,14 @@ Timestamp: ${telemetry.timestamp}
       debugPrint('Stopping mission');
       socket!.emit('stop_mission');
     }
-    
+
     // Stop mock telemetry timer
     _telemetryTimer?.cancel();
     _isMissionActive = false;
     _currentMission = null;
     _missionProgress = 0;
     _waypointIndex = 0;
-    
+
     // Clear telemetry data
     _altitude = 0;
     _speed = 0;
@@ -448,7 +539,7 @@ Timestamp: ${telemetry.timestamp}
     _sprayLevel = 100; // Reset to 100%
     _latitude = 0;
     _longitude = 0;
-    
+
     // Send a final telemetry update with cleared values
     _telemetryController.add(Telemetry(
       latitude: _latitude,
@@ -461,7 +552,7 @@ Timestamp: ${telemetry.timestamp}
       missionProgress: _missionProgress,
       timestamp: DateTime.now(),
     ));
-    
+
     notifyListeners();
   }
 
@@ -480,4 +571,4 @@ Timestamp: ${telemetry.timestamp}
     _telemetryController.close();
     super.dispose();
   }
-} 
+}
