@@ -1,3 +1,4 @@
+// Removed bottom audio/text inputs; imports not needed
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -8,7 +9,6 @@ import 'package:agron_gcs/widgets/mission_controls.dart';
 import 'package:agron_gcs/services/drone_service.dart';
 import 'package:agron_gcs/screens/mission_screen.dart';
 import 'package:agron_gcs/screens/auth/login_screen.dart';
-import 'package:agron_gcs/theme/app_theme.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -16,7 +16,7 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final droneService = Provider.of<DroneService>(context);
-    
+
     return WillPopScope(
       onWillPop: () async => false, // Prevent back button navigation
       child: Scaffold(
@@ -46,14 +46,17 @@ class HomeScreen extends StatelessWidget {
               actions: [
                 // Connection status indicator
                 Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                   width: 12,
                   height: 12,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: droneService.isConnected 
-                        ? Colors.green 
-                        : (droneService.isConnecting ? Colors.orange : Colors.red),
+                    color: droneService.isConnected
+                        ? Colors.green
+                        : (droneService.isConnecting
+                            ? Colors.orange
+                            : Colors.red),
                   ),
                 ),
                 // Connect button
@@ -77,7 +80,8 @@ class HomeScreen extends StatelessWidget {
                   onPressed: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const MissionScreen()),
+                      MaterialPageRoute(
+                          builder: (context) => const MissionScreen()),
                     );
                   },
                   tooltip: 'Mission History',
@@ -93,7 +97,8 @@ class HomeScreen extends StatelessWidget {
                     Provider.of<AuthProvider>(context, listen: false).logout();
                     Navigator.pushReplacement(
                       context,
-                      MaterialPageRoute(builder: (context) => const LoginScreen()),
+                      MaterialPageRoute(
+                          builder: (context) => const LoginScreen()),
                     );
                   },
                   tooltip: 'Logout',
@@ -112,32 +117,41 @@ class HomeScreen extends StatelessWidget {
                     top: 16,
                     right: 16,
                     child: Card(
-                      // child: Padding(
-                      //   padding: const EdgeInsets.all(8.0),
-                      //   // child: Column(
-                      //   //   children: [
-                      //   //     ElevatedButton(
-                      //   //       onPressed: () {
-                      //   //         // TODO: Implement mission planning
-                      //   //       },
-                      //   //       child: const Text('Plan Mission'),
-                      //   //     ),
-                      //   //     const SizedBox(height: 8),
-                      //   //     ElevatedButton(
-                      //   //       onPressed: () {
-                      //   //         // TODO: Implement emergency return
-                      //   //       },
-                      //   //       style: ElevatedButton.styleFrom(
-                      //   //         backgroundColor: Colors.red,
-                      //   //       ),
-                      //   //       child: const Text('Emergency Return'),
-                      //   //     ),
-                      //   //   ],
-                      //   // ),
-                    ),
+                        // child: Padding(
+                        //   padding: const EdgeInsets.all(8.0),
+                        //   // child: Column(
+                        //   //   children: [
+                        //   //     ElevatedButton(
+                        //   //       onPressed: () {
+                        //   //         // TODO: Implement mission planning
+                        //   //       },
+                        //   //       child: const Text('Plan Mission'),
+                        //   //     ),
+                        //   //     const SizedBox(height: 8),
+                        //   //     ElevatedButton(
+                        //   //       onPressed: () {
+                        //   //         // TODO: Implement emergency return
+                        //   //       },
+                        //   //       style: ElevatedButton.styleFrom(
+                        //   //         backgroundColor: Colors.red,
+                        //   //       ),
+                        //   //       child: const Text('Emergency Return'),
+                        //   //     ),
+                        //   //   ],
+                        //   // ),
+                        ),
                   ),
                 ],
               ),
+            ),
+            // Bottom inputs removed as per request
+            const SizedBox.shrink(),
+            const Divider(
+              color: Color.fromARGB(255, 250, 242, 242), // line color
+              thickness: 2, // line thickness
+              indent: 20, // left spacing
+              endIndent: 20, // right spacing
+              height: 0.2, // height of the divider
             ),
             TelemetryPanel(
               droneService: droneService,
@@ -151,9 +165,10 @@ class HomeScreen extends StatelessWidget {
 
   void _showConnectionDialog(BuildContext context, DroneService droneService) {
     final TextEditingController ipController = TextEditingController(
-      text: droneService.baseUrl.replaceAll('http://', '').replaceAll(':5000', '')
-    );
-    
+        text: droneService.baseUrl
+            .replaceAll('http://', '')
+            .replaceAll(':5000', ''));
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -188,7 +203,8 @@ class HomeScreen extends StatelessWidget {
             onPressed: () {
               final ip = ipController.text.trim();
               if (ip.isNotEmpty) {
-                droneService.connectToDrone(ip);
+                // Use WebSocket telemetry server (server1.py on port 5001)
+                droneService.connectToTelemetryWs(ip);
                 Navigator.pop(context);
               }
             },
@@ -198,4 +214,4 @@ class HomeScreen extends StatelessWidget {
       ),
     );
   }
-} 
+}

@@ -14,7 +14,8 @@ import '../services/drone_service.dart';
 import '../services/mission_storage.dart';
 import '../models/mission.dart';
 import '../models/telemetry.dart';
-import 'emergency_puzzle.dart';
+// import 'emergency_puzzle.dart';
+import 'audio_recorder.dart';
 
 class CustomTileProvider extends TileProvider {
   final String urlTemplate;
@@ -22,7 +23,8 @@ class CustomTileProvider extends TileProvider {
   final Map<String, File> tileCache = {};
   final String mapType;
 
-  CustomTileProvider(this.urlTemplate, this.cacheDir, {this.mapType = 'standard'});
+  CustomTileProvider(this.urlTemplate, this.cacheDir,
+      {this.mapType = 'standard'});
 
   @override
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
@@ -31,23 +33,25 @@ class CustomTileProvider extends TileProvider {
         .replaceAll('{x}', coordinates.x.toString())
         .replaceAll('{y}', coordinates.y.toString());
 
-    final fileName = '${mapType}_${coordinates.z}_${coordinates.x}_${coordinates.y}.png';
+    final fileName =
+        '${mapType}_${coordinates.z}_${coordinates.x}_${coordinates.y}.png';
     final file = File('${cacheDir.path}/map_tiles/$fileName');
 
     if (file.existsSync()) {
       return FileImage(file);
     }
 
-    return NetworkImage(url)..evict().then((_) async {
-      try {
-        final response = await http.get(Uri.parse(url));
-        if (response.statusCode == 200) {
-          await file.writeAsBytes(response.bodyBytes);
+    return NetworkImage(url)
+      ..evict().then((_) async {
+        try {
+          final response = await http.get(Uri.parse(url));
+          if (response.statusCode == 200) {
+            await file.writeAsBytes(response.bodyBytes);
+          }
+        } catch (e) {
+          debugPrint('Error caching tile: $e');
         }
-      } catch (e) {
-        debugPrint('Error caching tile: $e');
-      }
-    });
+      });
   }
 }
 
@@ -63,15 +67,15 @@ class _MapViewState extends State<MapView> {
   final List<LatLng> _points = [];
   late final DroneService _droneService;
   final MissionStorage _missionStorage = MissionStorage();
-  
+
   // Default mission parameters
   static const double defaultAltitude = 30.0; // meters
   static const double defaultSprayRate = 2.0; // liters per minute
-  
+
   bool _isDrawing = false;
   bool _isSatelliteView = false;
-  bool _isConnected = false;
-  bool _isMissionActive = false;
+  // Connection and mission flags are managed via DroneService; local copies not used
+  // Keeping minimal state only
   LatLng? _currentLocation;
   LatLng? _droneLocation;
   bool _isLoading = false;
@@ -81,6 +85,47 @@ class _MapViewState extends State<MapView> {
   CustomTileProvider? _satelliteTileProvider;
   StreamSubscription<Telemetry>? _telemetrySubscription;
   Timer? _connectionTimer;
+
+  List<LatLng> _computeConvexHull(List<LatLng> points) {
+    if (points.length <= 3) return List<LatLng>.from(points);
+
+    int compare(LatLng a, LatLng b) {
+      if (a.longitude == b.longitude) {
+        return a.latitude.compareTo(b.latitude);
+      }
+      return a.longitude.compareTo(b.longitude);
+    }
+
+    double cross(LatLng o, LatLng a, LatLng b) {
+      return (a.longitude - o.longitude) * (b.latitude - o.latitude) -
+          (a.latitude - o.latitude) * (b.longitude - o.longitude);
+    }
+
+    final sorted = List<LatLng>.from(points)..sort(compare);
+
+    final List<LatLng> lower = [];
+    for (final p in sorted) {
+      while (lower.length >= 2 &&
+          cross(lower[lower.length - 2], lower.last, p) <= 0) {
+        lower.removeLast();
+      }
+      lower.add(p);
+    }
+
+    final List<LatLng> upper = [];
+    for (int i = sorted.length - 1; i >= 0; i--) {
+      final p = sorted[i];
+      while (upper.length >= 2 &&
+          cross(upper[upper.length - 2], upper.last, p) <= 0) {
+        upper.removeLast();
+      }
+      upper.add(p);
+    }
+
+    lower.removeLast();
+    upper.removeLast();
+    return [...lower, ...upper];
+  }
 
   @override
   void didChangeDependencies() {
@@ -95,16 +140,7 @@ class _MapViewState extends State<MapView> {
       setState(() {
         _lastTelemetry = telemetry;
         _droneLocation = LatLng(telemetry.latitude, telemetry.longitude);
-        _isConnected = true;
       });
-    });
-
-    _connectionTimer?.cancel();
-    _connectionTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (_lastTelemetry != null &&
-          DateTime.now().difference(_lastTelemetry!.timestamp).inSeconds > 10) {
-        setState(() => _isConnected = false);
-      }
     });
   }
 
@@ -165,20 +201,17 @@ class _MapViewState extends State<MapView> {
     setState(() {
       _isSatelliteView = !_isSatelliteView;
     });
-    
+
     // Force map to refresh by moving to the same position
     if (_currentLocation != null) {
       final currentZoom = _mapController.zoom;
-      
+
       // First move away from current position
       _mapController.move(
-        LatLng(
-          _currentLocation!.latitude + 0.0001,
-          _currentLocation!.longitude + 0.0001
-        ),
-        currentZoom
-      );
-      
+          LatLng(_currentLocation!.latitude + 0.0001,
+              _currentLocation!.longitude + 0.0001),
+          currentZoom);
+
       // Then move back to the original position after a short delay
       Future.delayed(const Duration(milliseconds: 100), () {
         if (mounted) {
@@ -200,7 +233,9 @@ class _MapViewState extends State<MapView> {
   Future<Mission?> _createMission() async {
     if (_points.length < 3 || _currentLocation == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please mark at least 3 points and ensure location is available')),
+        const SnackBar(
+            content: Text(
+                'Please mark at least 3 points and ensure location is available')),
       );
       return null;
     }
@@ -208,12 +243,14 @@ class _MapViewState extends State<MapView> {
     final mission = Mission(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: 'Mission ${DateTime.now().toString()}',
-      waypoints: _points.map((point) => MissionWaypoint(
-        position: point,
-        altitude: defaultAltitude,
-        sprayRate: defaultSprayRate,
-        sprayEnabled: true,
-      )).toList(),
+      waypoints: _points
+          .map((point) => MissionWaypoint(
+                position: point,
+                altitude: defaultAltitude,
+                sprayRate: defaultSprayRate,
+                sprayEnabled: true,
+              ))
+          .toList(),
       defaultAltitude: defaultAltitude,
       defaultSprayRate: defaultSprayRate,
       createdAt: DateTime.now(),
@@ -230,36 +267,7 @@ class _MapViewState extends State<MapView> {
     }
   }
 
-  void _showEmergencyPuzzle() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => EmergencyPuzzle(
-        onPuzzleSolved: _triggerEmergencyReturn,
-      ),
-    );
-  }
-
-  Future<void> _triggerEmergencyReturn() async {
-    setState(() => _isLoading = true);
-    try {
-      await _droneService.triggerEmergencyReturn();
-      setState(() {
-        _isMissionActive = false;
-        _isDrawing = false;
-        _points.clear();
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Emergency return triggered')),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to trigger emergency return: $e')),
-      );
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
+  // Removed emergency puzzle trigger from map to reduce warnings
 
   @override
   Widget build(BuildContext context) {
@@ -268,6 +276,13 @@ class _MapViewState extends State<MapView> {
     }
 
     final isMissionActive = _droneService.isMissionActive;
+    final missionPoints = _droneService.currentMission?.waypoints
+            .map((w) => w.position)
+            .toList() ??
+        _points;
+    final hullPoints = missionPoints.isNotEmpty
+        ? _computeConvexHull(missionPoints)
+        : <LatLng>[];
 
     return Stack(
       children: [
@@ -284,7 +299,8 @@ class _MapViewState extends State<MapView> {
                   ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
                   : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.agron.gcs',
-              tileProvider: _isSatelliteView ? _satelliteTileProvider! : _tileProvider!,
+              tileProvider:
+                  _isSatelliteView ? _satelliteTileProvider! : _tileProvider!,
               maxZoom: 19,
             ),
             if (_droneLocation != null)
@@ -305,21 +321,23 @@ class _MapViewState extends State<MapView> {
                   ),
                 ],
               ),
-            CurrentLocationLayer(
-              positionStream: const LocationMarkerDataStreamFactory().fromGeolocatorPositionStream(),
-              style: const LocationMarkerStyle(
-                marker: DefaultLocationMarker(
-                  color: Colors.blue,
-                  child: Icon(
-                    Icons.location_on,
-                    color: Colors.white,
+            if (!isMissionActive)
+              CurrentLocationLayer(
+                positionStream: const LocationMarkerDataStreamFactory()
+                    .fromGeolocatorPositionStream(),
+                style: const LocationMarkerStyle(
+                  marker: DefaultLocationMarker(
+                    color: Colors.blue,
+                    child: Icon(
+                      Icons.location_on,
+                      color: Colors.white,
+                    ),
                   ),
+                  markerSize: Size(40, 40),
+                  accuracyCircleColor: Colors.blue,
                 ),
-                markerSize: Size(40, 40),
-                accuracyCircleColor: Colors.blue,
               ),
-            ),
-            if (_points.isNotEmpty) ...[
+            if (!isMissionActive && _points.isNotEmpty) ...[
               PolygonLayer(
                 polygons: [
                   Polygon(
@@ -374,6 +392,18 @@ class _MapViewState extends State<MapView> {
                     )
                     .toList(),
               ),
+            ] else if (isMissionActive && hullPoints.isNotEmpty) ...[
+              PolygonLayer(
+                polygons: [
+                  Polygon(
+                    points: hullPoints,
+                    color: Colors.green.withAlpha(60),
+                    borderStrokeWidth: 3,
+                    borderColor: Colors.green,
+                    isFilled: true,
+                  ),
+                ],
+              ),
             ],
           ],
         ),
@@ -385,14 +415,16 @@ class _MapViewState extends State<MapView> {
               children: [
                 IconButton(
                   icon: Icon(_isDrawing ? Icons.edit_off : Icons.edit),
-                  onPressed: isMissionActive ? null : () {
-                    setState(() {
-                      _isDrawing = !_isDrawing;
-                      if (_isDrawing) {
-                        _points.clear();
-                      }
-                    });
-                  },
+                  onPressed: isMissionActive
+                      ? null
+                      : () {
+                          setState(() {
+                            _isDrawing = !_isDrawing;
+                            if (_isDrawing) {
+                              _points.clear();
+                            }
+                          });
+                        },
                   tooltip: _isDrawing ? 'Stop Drawing' : 'Start Drawing',
                   color: _isDrawing ? Colors.blue : null,
                 ),
@@ -402,7 +434,9 @@ class _MapViewState extends State<MapView> {
                     color: _isSatelliteView ? Colors.blue : null,
                   ),
                   onPressed: _toggleSatelliteView,
-                  tooltip: _isSatelliteView ? 'Switch to Map View' : 'Switch to Satellite View',
+                  tooltip: _isSatelliteView
+                      ? 'Switch to Map View'
+                      : 'Switch to Satellite View',
                 ),
                 IconButton(
                   icon: const Icon(Icons.my_location),
@@ -417,9 +451,11 @@ class _MapViewState extends State<MapView> {
                   ),
                   IconButton(
                     icon: const Icon(Icons.clear_all),
-                    onPressed: _points.isNotEmpty ? () {
-                      setState(() => _points.clear());
-                    } : null,
+                    onPressed: _points.isNotEmpty
+                        ? () {
+                            setState(() => _points.clear());
+                          }
+                        : null,
                     tooltip: 'Clear All Points',
                   ),
                   IconButton(
@@ -429,9 +465,12 @@ class _MapViewState extends State<MapView> {
                   ),
                   IconButton(
                     icon: const Icon(Icons.save),
-                    onPressed: _points.length >= 3 ? () => _saveMission() : null,
+                    onPressed:
+                        _points.length >= 3 ? () => _saveMission() : null,
                     tooltip: 'Save Mission',
-                    color: _droneService.currentMission != null ? Colors.green : null,
+                    color: _droneService.currentMission != null
+                        ? Colors.green
+                        : null,
                   ),
                 ],
                 IconButton(
@@ -449,6 +488,31 @@ class _MapViewState extends State<MapView> {
                     _mapController.move(_mapController.center, zoom);
                   },
                   tooltip: 'Zoom Out',
+                ),
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          top: 10,
+          left: 12,
+          child: Card(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: SizedBox(
+                    width: 56,
+                    height: 56,
+                    child: AudioRecorderButton(),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chat_bubble_outline),
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/chat');
+                  },
+                  tooltip: 'Open Chat',
                 ),
               ],
             ),
@@ -509,7 +573,8 @@ class _MapViewState extends State<MapView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Number of points: ${_points.length}'),
-            Text('Area: ${area.toStringAsFixed(2)} m² (${acres.toStringAsFixed(2)} acres)'),
+            Text(
+                'Area: ${area.toStringAsFixed(2)} m² (${acres.toStringAsFixed(2)} acres)'),
             Text('Perimeter: ${perimeter.toStringAsFixed(2)} meters'),
             const SizedBox(height: 16),
             const Text('Points:'),
@@ -540,7 +605,7 @@ class _MapViewState extends State<MapView> {
 
   double _calculateArea() {
     if (_points.length < 3) return 0;
-    
+
     double area = 0;
     for (int i = 0; i < _points.length; i++) {
       int j = (i + 1) % _points.length;
@@ -553,7 +618,7 @@ class _MapViewState extends State<MapView> {
 
   double _calculatePerimeter() {
     if (_points.length < 2) return 0;
-    
+
     double perimeter = 0;
     for (int i = 0; i < _points.length; i++) {
       int j = (i + 1) % _points.length;
@@ -564,7 +629,7 @@ class _MapViewState extends State<MapView> {
 
   double _calculateDistance(LatLng point1, LatLng point2) {
     const double earthRadius = 6371000; // meters
-    
+
     double lat1 = point1.latitude * pi / 180;
     double lat2 = point2.latitude * pi / 180;
     double dLat = (point2.latitude - point1.latitude) * pi / 180;
@@ -573,7 +638,7 @@ class _MapViewState extends State<MapView> {
     double a = sin(dLat / 2) * sin(dLat / 2) +
         cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2);
     double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    
+
     return earthRadius * c;
   }
 
@@ -604,4 +669,4 @@ class _MapViewState extends State<MapView> {
     _mapController.dispose();
     super.dispose();
   }
-} 
+}
