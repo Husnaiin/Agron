@@ -180,7 +180,7 @@ async def generate_telemetry():
                     drone_longitude += lng_diff * 0.01
                     
                     # Calculate heading based on movement direction
-                    drone_heading = (math.atan2(lng_diff, lat_diff) * 180 / math.pi) % 360
+                    drone_heading = 0#(math.atan2(lng_diff, lat_diff) * 180 / math.pi) % 360
                 else:
                     # Reached current waypoint, move to next
                     current_waypoint_index = min(current_waypoint_index + 1, total_waypoints - 1)

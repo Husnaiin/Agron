@@ -65,8 +65,9 @@ class MapView extends StatefulWidget {
 class _MapViewState extends State<MapView> {
   final MapController _mapController = MapController();
   final List<LatLng> _points = [];
-  late final DroneService _droneService;
+  late DroneService _droneService;
   final MissionStorage _missionStorage = MissionStorage();
+  bool _wasMissionActive = false;
 
   // Default mission parameters
   static const double defaultAltitude = 30.0; // meters
@@ -132,6 +133,18 @@ class _MapViewState extends State<MapView> {
     super.didChangeDependencies();
     _droneService = Provider.of<DroneService>(context, listen: false);
     _setupTelemetrySubscription();
+    _droneService.addListener(_onServiceChange);
+  }
+
+  void _onServiceChange() {
+    final isActive = _droneService.isMissionActive;
+    if (_wasMissionActive && !isActive) {
+      setState(() {
+        _droneLocation = null; // remove airplane icon
+        _points.clear(); // clear any drawn points
+      });
+    }
+    _wasMissionActive = isActive;
   }
 
   void _setupTelemetrySubscription() {
@@ -275,14 +288,17 @@ class _MapViewState extends State<MapView> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final isMissionActive = _droneService.isMissionActive;
-    final missionPoints = _droneService.currentMission?.waypoints
-            .map((w) => w.position)
-            .toList() ??
-        _points;
+    // Listen to service to rebuild UI on state changes
+    final service = Provider.of<DroneService>(context);
+    final isMissionActive = service.isMissionActive;
+    final missionPoints =
+        service.currentMission?.waypoints.map((w) => w.position).toList() ??
+            _points;
     final hullPoints = missionPoints.isNotEmpty
         ? _computeConvexHull(missionPoints)
         : <LatLng>[];
+    final drawingHullPoints =
+        _points.isNotEmpty ? _computeConvexHull(_points) : <LatLng>[];
 
     return Stack(
       children: [
@@ -341,7 +357,7 @@ class _MapViewState extends State<MapView> {
               PolygonLayer(
                 polygons: [
                   Polygon(
-                    points: _points,
+                    points: drawingHullPoints,
                     color: Colors.blue.withAlpha(50),
                     borderStrokeWidth: 2,
                     borderColor: Colors.blue,
@@ -352,7 +368,7 @@ class _MapViewState extends State<MapView> {
               PolylineLayer(
                 polylines: [
                   Polyline(
-                    points: _points,
+                    points: drawingHullPoints,
                     color: Colors.blue,
                     strokeWidth: 2,
                   ),
@@ -392,7 +408,7 @@ class _MapViewState extends State<MapView> {
                     )
                     .toList(),
               ),
-            ] else if (isMissionActive && hullPoints.isNotEmpty) ...[
+            ] else if (hullPoints.isNotEmpty) ...[
               PolygonLayer(
                 polygons: [
                   Polygon(
@@ -665,6 +681,7 @@ class _MapViewState extends State<MapView> {
   void dispose() {
     _telemetrySubscription?.cancel();
     _connectionTimer?.cancel();
+    _droneService.removeListener(_onServiceChange);
     _droneService.dispose();
     _mapController.dispose();
     super.dispose();

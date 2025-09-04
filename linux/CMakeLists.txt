@@ -9,6 +9,9 @@ set(BINARY_NAME "agron_gcs")
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
 set(APPLICATION_ID "com.example.agron_gcs")
 
+# Ensure APPLICATION_ID is visible to all subtargets (including plugins)
+add_compile_definitions(APPLICATION_ID="${APPLICATION_ID}")
+
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
 cmake_policy(SET CMP0063 NEW)

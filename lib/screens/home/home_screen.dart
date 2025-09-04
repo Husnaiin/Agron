@@ -178,6 +178,7 @@ class HomeScreen extends StatelessWidget {
           children: [
             TextField(
               controller: ipController,
+              enabled: !droneService.isConnected && !droneService.isConnecting,
               decoration: const InputDecoration(
                 labelText: 'Raspberry Pi IP Address',
                 hintText: 'e.g., 192.168.1.100',
@@ -199,17 +200,28 @@ class HomeScreen extends StatelessWidget {
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
-          ElevatedButton(
-            onPressed: () {
-              final ip = ipController.text.trim();
-              if (ip.isNotEmpty) {
-                // Use WebSocket telemetry server (server1.py on port 5001)
-                droneService.connectToTelemetryWs(ip);
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Connect'),
-          ),
+          if (!droneService.isConnected)
+            ElevatedButton(
+              onPressed: droneService.isConnecting
+                  ? null
+                  : () {
+                      final ip = ipController.text.trim();
+                      if (ip.isNotEmpty) {
+                        droneService.connectToTelemetryWs(ip);
+                        Navigator.pop(context);
+                      }
+                    },
+              child:
+                  Text(droneService.isConnecting ? 'Connecting…' : 'Connect'),
+            ),
+          if (droneService.isConnected)
+            ElevatedButton(
+              onPressed: () async {
+                await droneService.disconnectFromDrone();
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: const Text('Disconnect'),
+            ),
         ],
       ),
     );
