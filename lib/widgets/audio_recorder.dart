@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
-import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 class AudioRecorderButton extends StatefulWidget {
@@ -58,14 +57,17 @@ class _AudioRecorderButtonState extends State<AudioRecorderButton> {
       child: ElevatedButton(
         style: ElevatedButton.styleFrom(
           backgroundColor: isRecording ? Colors.red : Colors.green,
-          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          shape: CircleBorder(), // makes it round like a mic button
+          shape: const CircleBorder(),
+          padding: EdgeInsets.zero,
+          fixedSize: const Size(48, 48),
+          minimumSize: const Size(48, 48),
+          alignment: Alignment.center,
         ),
         onPressed: _toggleRecording,
         child: Icon(
           isRecording ? Icons.stop : Icons.mic,
           color: Colors.white,
-          size: 20,
+          size: 24,
         ),
       ),
     );

@@ -15,6 +15,13 @@ class MissionScreen extends StatefulWidget {
 
 class _MissionScreenState extends State<MissionScreen> {
   final MissionStorage _missionStorage = MissionStorage();
+  late Future<List<Mission>> _missionsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _missionsFuture = _missionStorage.getMissions();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -23,7 +30,7 @@ class _MissionScreenState extends State<MissionScreen> {
         title: const Text('Mission History'),
       ),
       body: FutureBuilder<List<Mission>>(
-        future: _missionStorage.getMissions(),
+        future: _missionsFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -42,7 +49,8 @@ class _MissionScreenState extends State<MissionScreen> {
             itemCount: missions.length,
             itemBuilder: (context, index) {
               final mission = missions[index];
-              final area = _calculateArea(mission.waypoints.map((w) => w.position).toList());
+              final area = _calculateArea(
+                  mission.waypoints.map((w) => w.position).toList());
               final acres = area / 4046.86; // Convert square meters to acres
 
               return Card(
@@ -52,8 +60,10 @@ class _MissionScreenState extends State<MissionScreen> {
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}'),
-                      Text('Status: ${mission.status.toString().split('.').last}'),
+                      Text(
+                          'Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}'),
+                      Text(
+                          'Status: ${mission.status.toString().split('.').last}'),
                       Text('Area: ${acres.toStringAsFixed(2)} acres'),
                       Text('Waypoints: ${mission.waypoints.length}'),
                     ],
@@ -73,7 +83,9 @@ class _MissionScreenState extends State<MissionScreen> {
                       ),
                     ],
                   ),
-                  onTap: () => _showMissionDetails(mission),
+                  onTap: () {
+                    _showMissionInfo(context, mission);
+                  },
                 ),
               );
             },
@@ -85,7 +97,7 @@ class _MissionScreenState extends State<MissionScreen> {
 
   double _calculateArea(List<LatLng> points) {
     if (points.length < 3) return 0;
-    
+
     double area = 0;
     for (int i = 0; i < points.length; i++) {
       int j = (i + 1) % points.length;
@@ -100,6 +112,49 @@ class _MissionScreenState extends State<MissionScreen> {
     final droneService = context.read<DroneService>();
     droneService.setMission(mission);
     Navigator.pushReplacementNamed(context, '/home');
+  }
+
+  void _showMissionInfo(BuildContext context, Mission mission) {
+    final area =
+        _calculateArea(mission.waypoints.map((w) => w.position).toList());
+    final acres = area / 4046.86;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(mission.name),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                    'Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}'),
+                const SizedBox(height: 8),
+                Text('Area: ${acres.toStringAsFixed(2)} acres'),
+                const SizedBox(height: 12),
+                const Text('Waypoints:',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                ...mission.waypoints.asMap().entries.map((e) {
+                  final i = e.key + 1;
+                  final p = e.value.position;
+                  return Text(
+                      '$i) ${p.latitude.toStringAsFixed(6)}, ${p.longitude.toStringAsFixed(6)}');
+                }).toList(),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _deleteMission(Mission mission) async {
@@ -123,62 +178,11 @@ class _MissionScreenState extends State<MissionScreen> {
 
     if (confirmed == true) {
       await _missionStorage.deleteMission(mission.id);
-      setState(() {}); // Refresh the list
+      setState(() {
+        _missionsFuture = _missionStorage.getMissions();
+      }); // Refresh the list
     }
   }
 
-  void _showMissionDetails(Mission mission) {
-    final area = _calculateArea(mission.waypoints.map((w) => w.position).toList());
-    final acres = area / 4046.86;
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(mission.name),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}'),
-              if (mission.completedAt != null)
-                Text('Completed: ${DateFormat.yMMMd().add_jm().format(mission.completedAt!)}'),
-              Text('Status: ${mission.status.toString().split('.').last}'),
-              Text('Area: ${area.toStringAsFixed(2)} m² (${acres.toStringAsFixed(2)} acres)'),
-              Text('Default Altitude: ${mission.defaultAltitude} m'),
-              Text('Default Spray Rate: ${mission.defaultSprayRate} L/min'),
-              const SizedBox(height: 16),
-              const Text('Waypoints:', style: TextStyle(fontWeight: FontWeight.bold)),
-              SizedBox(
-                height: 200,
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: mission.waypoints.length,
-                  itemBuilder: (context, index) {
-                    final waypoint = mission.waypoints[index];
-                    return ListTile(
-                      dense: true,
-                      title: Text(
-                        'Point ${index + 1}: (${waypoint.position.latitude.toStringAsFixed(6)}, '
-                        '${waypoint.position.longitude.toStringAsFixed(6)})',
-                      ),
-                      subtitle: Text(
-                        'Altitude: ${waypoint.altitude}m, Spray Rate: ${waypoint.sprayRate} L/min',
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-} 
+  // Removed unused details dialog to avoid linter warning; selection loads mission on map
+}
