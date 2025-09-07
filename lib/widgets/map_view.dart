@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'dart:ui' as ui;
 import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
@@ -9,6 +11,7 @@ import 'dart:math';
 import 'dart:io';
 import 'dart:async';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import '../services/drone_service.dart';
 import '../services/mission_storage.dart';
@@ -86,6 +89,9 @@ class _MapViewState extends State<MapView> {
   CustomTileProvider? _satelliteTileProvider;
   StreamSubscription<Telemetry>? _telemetrySubscription;
   Timer? _connectionTimer;
+
+  // Simple compass painter uses heading in degrees
+  // Renders a dial with a red north arrow rotated by heading
 
   List<LatLng> _computeConvexHull(List<LatLng> points) {
     if (points.length <= 3) return List<LatLng>.from(points);
@@ -190,23 +196,31 @@ class _MapViewState extends State<MapView> {
 
   Future<void> _requestLocationPermission() async {
     final status = await Permission.location.request();
+    // We don't need mobile GPS for centering anymore; center from drone/cache
     if (status.isGranted) {
-      _getCurrentLocation();
+      _loadLastDroneLocationFromCache();
     }
   }
 
   Future<void> _getCurrentLocation() async {
-    setState(() => _isLoading = true);
+    // No-op: keep for UI button compatibility; prefer drone position
+    await _loadLastDroneLocationFromCache();
+  }
+
+  Future<void> _loadLastDroneLocationFromCache() async {
     try {
-      final position = await Geolocator.getCurrentPosition();
-      setState(() {
-        _currentLocation = LatLng(position.latitude, position.longitude);
-        _mapController.move(_currentLocation!, 15);
-      });
+      final prefs = await SharedPreferences.getInstance();
+      final lat = prefs.getDouble('last_drone_latitude');
+      final lon = prefs.getDouble('last_drone_longitude');
+      if (lat != null && lon != null) {
+        setState(() {
+          _droneLocation = LatLng(lat, lon);
+          _currentLocation = _droneLocation;
+          _mapController.move(_droneLocation!, 15);
+        });
+      }
     } catch (e) {
-      debugPrint('Error getting location: $e');
-    } finally {
-      setState(() => _isLoading = false);
+      debugPrint('Failed to load cached drone location: $e');
     }
   }
 
@@ -253,10 +267,27 @@ class _MapViewState extends State<MapView> {
       return null;
     }
 
+    // Build waypoint list ensuring first waypoint is current drone location
+    final List<LatLng> combinedPoints = [];
+    if (_droneLocation != null) {
+      combinedPoints.add(_droneLocation!);
+    }
+    // Avoid immediate duplicate if user first point equals drone location
+    bool isSamePoint(LatLng a, LatLng b) {
+      const double epsilon = 1e-6;
+      return (a.latitude - b.latitude).abs() < epsilon &&
+          (a.longitude - b.longitude).abs() < epsilon;
+    }
+    for (final p in _points) {
+      if (combinedPoints.isEmpty || !isSamePoint(combinedPoints.last, p)) {
+        combinedPoints.add(p);
+      }
+    }
+
     final mission = Mission(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: 'Mission ${DateTime.now().toString()}',
-      waypoints: _points
+      waypoints: combinedPoints
           .map((point) => MissionWaypoint(
                 position: point,
                 altitude: defaultAltitude,
@@ -324,35 +355,13 @@ class _MapViewState extends State<MapView> {
                 markers: [
                   Marker(
                     point: _droneLocation!,
-                    width: 40,
-                    height: 40,
-                    child: Transform.rotate(
-                      angle: _lastTelemetry?.speed ?? 0,
-                      child: const Icon(
-                        Icons.flight,
-                        color: Colors.blue,
-                        size: 40,
-                      ),
-                    ),
+                    width: 48,
+                    height: 48,
+                    child: _QuadcopterMarker(headingDegrees: _lastTelemetry?.heading ?? 0),
                   ),
                 ],
               ),
-            if (!isMissionActive)
-              CurrentLocationLayer(
-                positionStream: const LocationMarkerDataStreamFactory()
-                    .fromGeolocatorPositionStream(),
-                style: const LocationMarkerStyle(
-                  marker: DefaultLocationMarker(
-                    color: Colors.blue,
-                    child: Icon(
-                      Icons.location_on,
-                      color: Colors.white,
-                    ),
-                  ),
-                  markerSize: Size(40, 40),
-                  accuracyCircleColor: Colors.blue,
-                ),
-              ),
+            // Remove live mobile location layer; focus on drone position
             if (!isMissionActive && _points.isNotEmpty) ...[
               PolygonLayer(
                 polygons: [
@@ -534,6 +543,19 @@ class _MapViewState extends State<MapView> {
             ),
           ),
         ),
+        Positioned(
+          top: 138,
+          left: 12,
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: _CompassWidget(
+                headingDegrees: _lastTelemetry?.heading ?? 0,
+                size: 56,
+              ),
+            ),
+          ),
+        ),
         if (_isLoading)
           const Center(
             child: CircularProgressIndicator(),
@@ -670,6 +692,16 @@ class _MapViewState extends State<MapView> {
     final mission = await _createMission();
     if (mission != null) {
       _droneService.setMission(mission);
+      try {
+        await _droneService.uploadMissionToAutopilot(mission);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mission uploaded to drone')),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed: $e')),
+        );
+      }
       setState(() => _isDrawing = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Mission saved successfully')),
@@ -685,5 +717,144 @@ class _MapViewState extends State<MapView> {
     _droneService.dispose();
     _mapController.dispose();
     super.dispose();
+  }
+}
+
+class _CompassWidget extends StatelessWidget {
+  final double headingDegrees;
+  final double size;
+  const _CompassWidget({required this.headingDegrees, this.size = 56});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _CompassPainter(headingDegrees: headingDegrees),
+      ),
+    );
+  }
+}
+
+class _CompassPainter extends CustomPainter {
+  final double headingDegrees;
+  _CompassPainter({required this.headingDegrees});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2 - 4;
+
+    final bgPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    final borderPaint = Paint()
+      ..color = Colors.black54
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    final tickPaint = Paint()
+      ..color = Colors.black26
+      ..strokeWidth = 1;
+    final northPaint = Paint()
+      ..color = Colors.red
+      ..style = PaintingStyle.fill;
+
+    // Dial
+    canvas.drawCircle(center, radius, bgPaint);
+    canvas.drawCircle(center, radius, borderPaint);
+
+    // Ticks every 30 degrees
+    for (int i = 0; i < 12; i++) {
+      final angle = (i * 30) * pi / 180;
+      final p1 = Offset(center.dx + (radius - 6) * cos(angle),
+          center.dy + (radius - 6) * sin(angle));
+      final p2 = Offset(center.dx + radius * cos(angle),
+          center.dy + radius * sin(angle));
+      canvas.drawLine(p1, p2, tickPaint);
+    }
+
+    // North arrow rotated by heading (0 deg points up)
+    final headingRad = (-headingDegrees + 0) * pi / 180; // screen y-down
+    final arrowLen = radius - 10;
+    final arrowTip = Offset(center.dx + arrowLen * sin(headingRad),
+        center.dy - arrowLen * cos(headingRad));
+    final baseLeft = Offset(center.dx - 6, center.dy + 8);
+    final baseRight = Offset(center.dx + 6, center.dy + 8);
+
+    final path = ui.Path()
+      ..moveTo(arrowTip.dx, arrowTip.dy)
+      ..lineTo(baseLeft.dx, baseLeft.dy)
+      ..lineTo(baseRight.dx, baseRight.dy)
+      ..close();
+    canvas.drawPath(path, northPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CompassPainter oldDelegate) {
+    return oldDelegate.headingDegrees != headingDegrees;
+  }
+}
+
+class _QuadcopterMarker extends StatelessWidget {
+  final double headingDegrees;
+  const _QuadcopterMarker({required this.headingDegrees});
+
+  @override
+  Widget build(BuildContext context) {
+    return Transform.rotate(
+      angle: (headingDegrees * pi / 180),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Body
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: Colors.black87,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+            ),
+          ),
+          // Arms
+          Container(width: 40, height: 2, color: Colors.black87),
+          Transform.rotate(
+            angle: pi / 2,
+            child: Container(width: 40, height: 2, color: Colors.black87),
+          ),
+          // Rotors
+          Positioned(
+            top: 0,
+            child: _rotor(),
+          ),
+          Positioned(
+            bottom: 0,
+            child: _rotor(),
+          ),
+          Positioned(
+            left: 0,
+            child: _rotor(),
+          ),
+          Positioned(
+            right: 0,
+            child: _rotor(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rotor() {
+    return Container(
+      width: 14,
+      height: 14,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        boxShadow: const [BoxShadow(blurRadius: 2, spreadRadius: 0.5)],
+        border: Border.all(color: Colors.black87, width: 2),
+      ),
+    );
   }
 }

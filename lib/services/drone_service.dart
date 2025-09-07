@@ -4,6 +4,7 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/telemetry.dart';
 import '../models/mission.dart';
 
@@ -42,6 +43,29 @@ class DroneService extends ChangeNotifier {
   void setMission(Mission mission) {
     _currentMission = mission;
     notifyListeners();
+  }
+
+  Future<void> uploadMissionToAutopilot(Mission mission) async {
+    try {
+      final missionJson = mission.toJson();
+      if (_wsChannel != null) {
+        final message = {
+          'type': 'upload_mission',
+          'waypoints': missionJson['waypoints'],
+          'defaultAltitude': mission.defaultAltitude,
+          'defaultSprayRate': mission.defaultSprayRate,
+        };
+        _wsChannel!.sink.add(json.encode(message));
+      } else if (socket != null) {
+        socket!.emit('upload_mission', missionJson);
+      } else {
+        throw Exception('Not connected to server');
+      }
+      debugPrint('Mission upload requested with ${mission.waypoints.length} waypoints');
+    } catch (e) {
+      debugPrint('Failed to upload mission: $e');
+      rethrow;
+    }
   }
 
   Future<void> connectToDrone(String ipAddress) async {
@@ -133,9 +157,9 @@ class DroneService extends ChangeNotifier {
     }
   }
 
-  Future<void> connectToTelemetryWs(String ipAddress) async {
+  Future<void> connectToTelemetryWs(String ipAddressOrUrl) async {
     if (_isConnecting) return;
-    _lastIpAddress = ipAddress;
+    _lastIpAddress = ipAddressOrUrl;
 
     _isConnecting = true;
     _connectionError = null;
@@ -152,12 +176,27 @@ class DroneService extends ChangeNotifier {
       await _wsChannel?.sink.close();
       _wsChannel = null;
 
-      final uri = Uri.parse('ws://$ipAddress:5001/ws/telemetry');
+      // Allow either a raw IP (e.g., 192.168.1.10) or a full ws:// URL
+      late Uri uri;
+      String host;
+      int port;
+      if (ipAddressOrUrl.startsWith('ws://') || ipAddressOrUrl.startsWith('wss://')) {
+        uri = Uri.parse(ipAddressOrUrl);
+        host = uri.host;
+        port = uri.port == 0 ? 5001 : uri.port;
+        if (uri.path.isEmpty || uri.path == '/') {
+          uri = uri.replace(path: '/ws/telemetry');
+        }
+      } else {
+        host = ipAddressOrUrl;
+        port = 5001;
+        uri = Uri.parse('ws://$host:$port/ws/telemetry');
+      }
       debugPrint('Connecting to WS telemetry at $uri');
 
       // Test HTTP connection first to validate the server exists
       final httpResponse = await http
-          .get(Uri.parse('http://$ipAddress:5001/status'))
+          .get(Uri.parse('http://$host:$port/status'))
           .timeout(const Duration(seconds: 5));
 
       if (httpResponse.statusCode != 200) {
@@ -193,6 +232,7 @@ class DroneService extends ChangeNotifier {
           } else if (messageType == 'telemetry') {
             final telemetry = Telemetry.fromJson(telemetryData);
             _telemetryController.add(telemetry);
+            _persistLastKnownDronePosition(telemetry);
             notifyListeners();
             debugPrint('WS telemetry received: $telemetryData');
           } else if (messageType == 'mission_status') {
@@ -218,7 +258,7 @@ class DroneService extends ChangeNotifier {
         _stopConnectionValidation();
       });
 
-      _baseUrl = 'ws://$ipAddress:5001';
+      _baseUrl = 'ws://$host:$port';
 
       // Wait for connection confirmation
       await Future.delayed(const Duration(seconds: 3));
@@ -234,6 +274,18 @@ class DroneService extends ChangeNotifier {
       _connectionError = e.toString();
       notifyListeners();
       debugPrint('Error connecting to WS telemetry: $e');
+    }
+  }
+
+  Future<void> _persistLastKnownDronePosition(Telemetry telemetry) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('last_drone_latitude', telemetry.latitude);
+      await prefs.setDouble('last_drone_longitude', telemetry.longitude);
+      await prefs.setDouble('last_drone_heading', telemetry.heading);
+      await prefs.setString('last_drone_timestamp', telemetry.timestamp.toIso8601String());
+    } catch (e) {
+      debugPrint('Failed to persist last drone position: $e');
     }
   }
 

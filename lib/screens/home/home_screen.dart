@@ -167,7 +167,9 @@ class HomeScreen extends StatelessWidget {
     final TextEditingController ipController = TextEditingController(
         text: droneService.baseUrl
             .replaceAll('http://', '')
-            .replaceAll(':5000', ''));
+            .replaceAll('ws://', '')
+            .replaceAll(':5000', '')
+            .replaceAll(':5001', ''));
 
     showDialog(
       context: context,
@@ -180,10 +182,11 @@ class HomeScreen extends StatelessWidget {
               controller: ipController,
               enabled: !droneService.isConnected && !droneService.isConnecting,
               decoration: const InputDecoration(
-                labelText: 'Raspberry Pi IP Address',
-                hintText: 'e.g., 192.168.1.100',
+                labelText: 'Server IP or WebSocket URL',
+                hintText:
+                    'e.g. 192.168.1.50  or  ws://192.168.1.50:5001/ws/telemetry',
               ),
-              keyboardType: TextInputType.number,
+              keyboardType: TextInputType.text,
             ),
             if (droneService.connectionError != null)
               Padding(

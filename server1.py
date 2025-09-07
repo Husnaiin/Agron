@@ -139,6 +139,94 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
             "status": "emergency_return"
         })
 
+    elif msg_type == "upload_mission":
+        try:
+            waypoints = message.get("waypoints", [])
+            default_alt = message.get("defaultAltitude", 30)
+            print(f"[UPLOAD] Received {len(waypoints)} waypoints for upload")
+            if mavutil is None:
+                await websocket.send_json({"type": "upload_result", "ok": False, "error": "pymavlink not installed"})
+                return
+
+            # Convert waypoints to MAVLink mission items (GLOBAL_INT)
+            mission_items = []
+            seq = 0
+            for wp in waypoints:
+                # Accept both {position:{lat,lng}} and {latitude,longitude}
+                if "position" in wp:
+                    lat = float(wp["position"]["latitude"]) if wp["position"].get("latitude") is not None else 0.0
+                    lon = float(wp["position"]["longitude"]) if wp["position"].get("longitude") is not None else 0.0
+                    alt = float(wp.get("altitude", default_alt))
+                else:
+                    lat = float(wp.get("latitude", 0.0))
+                    lon = float(wp.get("longitude", 0.0))
+                    alt = float(wp.get("altitude", default_alt))
+
+                mission_items.append({
+                    "seq": seq,
+                    "frame": mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                    "command": mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                    "current": 1 if seq == 0 else 0,
+                    "autocontinue": 1,
+                    "param1": 0,  # hold time
+                    "param2": 0,  # acceptance radius
+                    "param3": 0,  # pass radius
+                    "param4": float('nan'),  # yaw
+                    "x": int(lat * 1e7),
+                    "y": int(lon * 1e7),
+                    "z": alt,
+                })
+                seq += 1
+
+            # Perform upload in a background thread to avoid blocking WS loop
+            def _do_upload(items):
+                try:
+                    m = mavutil.mavlink_connection(MAVLINK_PORT, baud=MAVLINK_BAUD)
+                    m.wait_heartbeat(timeout=10)
+                    print("[UPLOAD] Connected, clearing and sending mission...")
+                    m.mav.mission_clear_all_send(m.target_system, m.target_component)
+                    m.mav.mission_count_send(m.target_system, m.target_component, len(items))
+
+                    recv_seq = 0
+                    while True:
+                        msg = m.recv_match(type=['MISSION_REQUEST_INT', 'MISSION_ACK'], blocking=True, timeout=10)
+                        if not msg:
+                            raise TimeoutError('MISSION_REQUEST timeout')
+                        if msg.get_type() == 'MISSION_ACK':
+                            print('[UPLOAD] ACK received')
+                            break
+                        if msg.get_type() == 'MISSION_REQUEST_INT':
+                            i = msg.seq
+                            it = items[i]
+                            m.mav.mission_item_int_send(
+                                m.target_system,
+                                m.target_component,
+                                it['seq'],
+                                it['frame'],
+                                it['command'],
+                                it['current'],
+                                it['autocontinue'],
+                                it['param1'], it['param2'], it['param3'], it['param4'],
+                                it['x'], it['y'], int(it['z'])
+                            )
+                            recv_seq += 1
+                            if recv_seq >= len(items):
+                                # wait for final ACK
+                                ack = m.recv_match(type='MISSION_ACK', blocking=True, timeout=10)
+                                if not ack:
+                                    raise TimeoutError('MISSION_ACK timeout')
+                                break
+                    print('[UPLOAD] Mission upload complete')
+                    return True, None
+                except Exception as e:
+                    return False, str(e)
+
+            loop = asyncio.get_event_loop()
+            ok, err = await loop.run_in_executor(None, _do_upload, mission_items)
+            await websocket.send_json({"type": "upload_result", "ok": ok, "error": err})
+        except Exception as e:
+            await websocket.send_json({"type": "upload_result", "ok": False, "error": str(e)})
+
 async def broadcast_message(message: Dict[str, Any]):
     """Send message to all connected clients"""
     if not connected_clients:
