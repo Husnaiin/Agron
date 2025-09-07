@@ -1,10 +1,16 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import asyncio
-import random
-import math
 import json
+import math
+import threading
+import time
 from datetime import datetime
 from typing import List, Dict, Any
+
+try:
+    from pymavlink import mavutil
+except Exception:
+    mavutil = None  # allows app to load even if pymavlink missing
 
 app = FastAPI()
 
@@ -17,11 +23,15 @@ mission_progress = 0
 # Drone position and telemetry
 drone_latitude = 0.0
 drone_longitude = 0.0
-drone_altitude = 30.0
-drone_speed = 5.0
+drone_altitude = 0.0
+drone_speed = 0.0
 drone_heading = 0.0
-drone_battery = 100
+drone_battery = 0
 drone_spray = 100
+
+# Track last known good coordinates (even if GPS has no current fix)
+last_good_latitude = None  # type: float | None
+last_good_longitude = None  # type: float | None
 
 # Connected clients
 connected_clients: List[WebSocket] = []
@@ -146,92 +156,215 @@ async def broadcast_message(message: Dict[str, Any]):
         if client in connected_clients:
             connected_clients.remove(client)
 
-async def generate_telemetry():
-    """Generate and broadcast telemetry data"""
-    global drone_latitude, drone_longitude, drone_altitude, drone_speed, drone_heading
-    global drone_battery, drone_spray, mission_progress, is_mission_active, current_waypoint_index
-    
+
+# ====== MAVLink integration ======
+MAVLINK_PORT = "/dev/ttyACM0"
+MAVLINK_BAUD = 115200
+
+
+def _request_message_interval(m: "mavutil.mavfile", msg_id: int, hz: float, target_comp: int) -> None:
+    try:
+        interval_us = int(1_000_000 / hz) if hz > 0 else 0
+        m.mav.command_long_send(
+            m.target_system,
+            target_comp,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            msg_id,
+            interval_us,
+            0, 0, 0, 0, 0,
+        )
+    except Exception:
+        pass
+
+
+def _mavlink_reader_loop():
+    global drone_latitude, drone_longitude, drone_altitude
+    global drone_speed, drone_heading, drone_battery
+
+    if mavutil is None:
+        print("pymavlink not installed; telemetry will remain static")
+        return
+
     while True:
-        if is_mission_active and mission_waypoints:
-            # Calculate progress based on waypoints
-            total_waypoints = len(mission_waypoints)
-            if total_waypoints > 0:
-                # Move towards current waypoint
-                current_waypoint = mission_waypoints[current_waypoint_index]
-                
-                # Get target coordinates
-                if "position" in current_waypoint:
-                    target_lat = current_waypoint["position"]["latitude"]
-                    target_lng = current_waypoint["position"]["longitude"]
-                elif "latitude" in current_waypoint and "longitude" in current_waypoint:
-                    target_lat = current_waypoint["latitude"]
-                    target_lng = current_waypoint["longitude"]
-                else:
+        try:
+            print(f"[MAVLINK] Connecting {MAVLINK_PORT} @ {MAVLINK_BAUD}...")
+            m = mavutil.mavlink_connection(MAVLINK_PORT, baud=MAVLINK_BAUD)
+            m.wait_heartbeat(timeout=10)
+            print(f"[MAVLINK] Heartbeat from system {m.target_system} comp {m.target_component}")
+
+            autopilot_comp = m.target_component or mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1
+
+            for msg_id, hz in [
+                (mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 10),
+                (mavutil.mavlink.MAVLINK_MSG_ID_VFR_HUD, 5),
+                (mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS, 1),
+                (mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 10),
+                (mavutil.mavlink.MAVLINK_MSG_ID_GPS_RAW_INT, 2),
+            ]:
+                _request_message_interval(m, msg_id, hz, autopilot_comp)
+
+            # Legacy ArduPilot stream requests (best-effort)
+            try:
+                def req(ds_id: int, hz: int):
+                    m.mav.request_data_stream_send(m.target_system, autopilot_comp, ds_id, hz, 1)
+
+                req(mavutil.mavlink.MAV_DATA_STREAM_POSITION, 10)
+                req(mavutil.mavlink.MAV_DATA_STREAM_EXTRA1, 10)
+                req(mavutil.mavlink.MAV_DATA_STREAM_EXTRA2, 5)
+                req(mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS, 1)
+            except Exception:
+                pass
+
+            # One-shot requests for static/origin info
+            try:
+                # HOME_POSITION
+                m.mav.command_long_send(
+                    m.target_system,
+                    autopilot_comp,
+                    mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
+                    0,
+                    mavutil.mavlink.MAVLINK_MSG_ID_HOME_POSITION,
+                    0, 0, 0, 0, 0, 0,
+                )
+                # GPS_GLOBAL_ORIGIN (EKF origin)
+                m.mav.command_long_send(
+                    m.target_system,
+                    autopilot_comp,
+                    mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
+                    0,
+                    mavutil.mavlink.MAVLINK_MSG_ID_GPS_GLOBAL_ORIGIN,
+                    0, 0, 0, 0, 0, 0,
+                )
+            except Exception:
+                pass
+
+            while True:
+                msg = m.recv_match(blocking=True, timeout=1)
+                if not msg:
                     continue
-                
-                # Calculate distance to target
-                lat_diff = target_lat - drone_latitude
-                lng_diff = target_lng - drone_longitude
-                distance = (lat_diff**2 + lng_diff**2)**0.5
-                
-                # Move towards target (1% of remaining distance)
-                if distance > 0.00001:  # If not close enough to waypoint
-                    drone_latitude += lat_diff * 0.01
-                    drone_longitude += lng_diff * 0.01
-                    
-                    # Calculate heading based on movement direction
-                    drone_heading = 0#(math.atan2(lng_diff, lat_diff) * 180 / math.pi) % 360
-                else:
-                    # Reached current waypoint, move to next
-                    current_waypoint_index = min(current_waypoint_index + 1, total_waypoints - 1)
-                
-                # Update mission progress
-                mission_progress = int((current_waypoint_index / total_waypoints) * 100)
-                
-                # If reached last waypoint, complete mission
-                if current_waypoint_index >= total_waypoints - 1 and distance <= 0.00001:
-                    is_mission_active = False
-                    mission_progress = 100
-                    print("Mission completed!")
-                    await broadcast_message({
-                        "type": "mission_status",
-                        "status": "completed"
-                    })
-        
-        # Update other telemetry values
-        drone_altitude = 30 + random.uniform(-2, 2)
-        drone_speed = 5 + random.uniform(-1, 1)
-        drone_battery = max(0, drone_battery - random.uniform(0, 0.1))
-        drone_spray = max(0, drone_spray - random.uniform(0, 0.05))
-        
-        # Create telemetry data
+                t = msg.get_type()
+
+                if t == "GLOBAL_POSITION_INT":
+                    # lat/lon degE7, relative_alt in mm, heading hdg/100 deg
+                    try:
+                        if getattr(msg, "lat", None) is not None and getattr(msg, "lon", None) is not None:
+                            lat = msg.lat / 1e7
+                            lon = msg.lon / 1e7
+                            # Accept only valid range; some boards send 0 until EKF origin set
+                            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0 and not (lat == 0.0 and lon == 0.0):
+                                drone_latitude = lat
+                                drone_longitude = lon
+                                globals()["last_good_latitude"] = lat
+                                globals()["last_good_longitude"] = lon
+                        if getattr(msg, "relative_alt", None) is not None:
+                            drone_altitude = msg.relative_alt / 1000.0
+                        if getattr(msg, "hdg", None) not in (None, 65535):
+                            drone_heading = (msg.hdg / 100.0) % 360.0
+                    except Exception:
+                        pass
+
+                elif t == "VFR_HUD":
+                    try:
+                        if getattr(msg, "groundspeed", None) is not None:
+                            drone_speed = float(msg.groundspeed)
+                        if getattr(msg, "heading", None) is not None:
+                            drone_heading = float(msg.heading) % 360.0
+                        if getattr(msg, "alt", None) is not None and not drone_altitude:
+                            drone_altitude = float(msg.alt)
+                    except Exception:
+                        pass
+
+                elif t == "ATTITUDE":
+                    try:
+                        # fallback heading from yaw (rad)
+                        if getattr(msg, "yaw", None) is not None and not drone_heading:
+                            drone_heading = (math.degrees(float(msg.yaw)) + 360.0) % 360.0
+                    except Exception:
+                        pass
+
+                elif t == "SYS_STATUS":
+                    try:
+                        br = getattr(msg, "battery_remaining", -1)
+                        if br is not None and br >= 0:
+                            drone_battery = int(br)
+                    except Exception:
+                        pass
+
+                elif t == "GPS_RAW_INT":
+                    # Even without a fix, many stacks report last lat/lon here; use as a fallback
+                    try:
+                        if getattr(msg, "lat", None) is not None and getattr(msg, "lon", None) is not None:
+                            lat = msg.lat / 1e7
+                            lon = msg.lon / 1e7
+                            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0 and not (lat == 0.0 and lon == 0.0):
+                                # Do not overwrite a valid GLOBAL_POSITION_INT, but keep as last-known
+                                globals()["last_good_latitude"] = lat
+                                globals()["last_good_longitude"] = lon
+                                if (drone_latitude == 0.0 and drone_longitude == 0.0):
+                                    drone_latitude = lat
+                                    drone_longitude = lon
+                    except Exception:
+                        pass
+
+                elif t == "HOME_POSITION":
+                    try:
+                        if getattr(msg, "latitude", None) is not None and getattr(msg, "longitude", None) is not None:
+                            lat = msg.latitude / 1e7
+                            lon = msg.longitude / 1e7
+                            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                                globals()["last_good_latitude"] = lat
+                                globals()["last_good_longitude"] = lon
+                                if (drone_latitude == 0.0 and drone_longitude == 0.0):
+                                    drone_latitude = lat
+                                    drone_longitude = lon
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            print(f"[MAVLINK] Error: {e}; reconnecting in 2s")
+            time.sleep(2)
+            continue
+
+async def generate_telemetry():
+    """Broadcast telemetry data as received from Pixhawk (no simulation)."""
+    global mission_progress, is_mission_active
+
+    while True:
+        # Use last known good coordinates if current are zero/empty
+        lat_out = drone_latitude if drone_latitude not in (None, 0.0) else last_good_latitude
+        lon_out = drone_longitude if drone_longitude not in (None, 0.0) else last_good_longitude
+
         telemetry = {
             "type": "telemetry",
-            "latitude": drone_latitude,
-            "longitude": drone_longitude,
+            "latitude": lat_out,
+            "longitude": lon_out,
             "altitude": drone_altitude,
             "speed": drone_speed,
             "heading": drone_heading,
-            "batteryPercentage": int(drone_battery),
+            "batteryPercentage": int(drone_battery) if isinstance(drone_battery, (int, float)) else None,
             "sprayLevel": int(drone_spray),
             "missionProgress": int(mission_progress),
             "timestamp": datetime.now().isoformat()
         }
-        
-        # Only emit telemetry if a mission is active
-        if is_mission_active:
-            print(f"telem: {telemetry}")
-            await broadcast_message(telemetry)
-        
-        # Wait for 1 second
+
+        #if is_mission_active:
+        print(f"telem: {telemetry}")
+        await broadcast_message(telemetry)
+
         await asyncio.sleep(1)
 
 @app.on_event("startup")
 async def startup_event():
     """Start telemetry generation on startup"""
+    # Start MAVLink reader background thread
+    threading.Thread(target=_mavlink_reader_loop, daemon=True).start()
+    # Periodic broadcast task
     asyncio.create_task(generate_telemetry())
 
 @app.get("/status")
 def status():
     """Health check endpoint"""
     return {"status": "running", "clients": len(connected_clients)}
+#source /home/agron/gcs-server/venv/bin/activate
+#uvicorn server1:app --host 0.0.0.0 --port 5001 --reload
