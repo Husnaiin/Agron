@@ -68,6 +68,25 @@ class DroneService extends ChangeNotifier {
     }
   }
 
+  Future<void> sendCaptureCommand(String command) async {
+    try {
+      if (_wsChannel != null) {
+        final message = {
+          'type': command,
+        };
+        _wsChannel!.sink.add(json.encode(message));
+      } else if (socket != null) {
+        socket!.emit(command);
+      } else {
+        throw Exception('Not connected to server');
+      }
+      debugPrint('Capture command sent: $command');
+    } catch (e) {
+      debugPrint('Failed to send capture command: $e');
+      rethrow;
+    }
+  }
+
   Future<void> connectToDrone(String ipAddress) async {
     if (_isConnecting) return;
     _lastIpAddress = ipAddress;

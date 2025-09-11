@@ -190,6 +190,20 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
             "status": "emergency_return"
         })
 
+    elif msg_type == "start_capture":
+        print("[CAMERA] Received start_capture command")
+        await broadcast_message({
+            "type": "camera_status",
+            "status": "capture_started"
+        })
+
+    elif msg_type == "stop_capture":
+        print("[CAMERA] Received stop_capture command")
+        await broadcast_message({
+            "type": "camera_status",
+            "status": "capture_stopped"
+        })
+
     elif msg_type == "upload_mission":
         # Expected payload: { "type": "upload_mission", "waypoints": [ {"latitude": .., "longitude": ..}, ... ] }
         if mavutil is None:

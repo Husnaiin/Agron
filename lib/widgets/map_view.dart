@@ -89,6 +89,7 @@ class _MapViewState extends State<MapView> {
   CustomTileProvider? _satelliteTileProvider;
   StreamSubscription<Telemetry>? _telemetrySubscription;
   Timer? _connectionTimer;
+  bool _isCapturing = false;
 
   // Simple compass painter uses heading in degrees
   // Renders a dial with a red north arrow rotated by heading
@@ -552,6 +553,51 @@ class _MapViewState extends State<MapView> {
               child: _CompassWidget(
                 headingDegrees: _lastTelemetry?.heading ?? 0,
                 size: 56,
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          top: 218,
+          left: 12,
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: SizedBox(
+                width: 56,
+                height: 56,
+                child: IconButton(
+                  icon: Icon(
+                    _isCapturing ? Icons.stop : Icons.camera_alt,
+                    size: 32,
+                    color: _isCapturing ? Colors.red : Colors.blue,
+                  ),
+                  onPressed: () async {
+                    setState(() {
+                      _isCapturing = !_isCapturing;
+                    });
+                    try {
+                      if (_isCapturing) {
+                        await _droneService.sendCaptureCommand('start_capture');
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Camera capture started')),
+                        );
+                      } else {
+                        await _droneService.sendCaptureCommand('stop_capture');
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Camera capture stopped')),
+                        );
+                      }
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Capture command failed: $e')),
+                      );
+                      setState(() {
+                        _isCapturing = !_isCapturing; // revert on error
+                      });
+                    }
+                  },
+                ),
               ),
             ),
           ),
