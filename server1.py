@@ -6,6 +6,9 @@ import threading
 import time
 from datetime import datetime
 from typing import List, Dict, Any
+import pathlib
+import shutil
+from asyncio.subprocess import PIPE
 
 try:
     from pymavlink import mavutil
@@ -41,6 +44,103 @@ mavlink_master = None  # type: ignore
 mavlink_lock = threading.Lock()
 mavlink_rx_pause = threading.Event()
 mavlink_pause_since = 0.0
+
+############################
+# Camera capture management
+############################
+
+# Capture control
+capture_task: asyncio.Task | None = None
+capture_stop_event: asyncio.Event | None = None
+
+NOIR_DIR = pathlib.Path("/home/agron/Agron/noir")
+RGB_DIR = pathlib.Path("/home/agron/Agron/rgb")
+
+def _ensure_capture_dirs():
+    try:
+        NOIR_DIR.mkdir(parents=True, exist_ok=True)
+        RGB_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"[CAMERA] Failed to create directories: {e}")
+
+async def _list_cameras():
+    # Logs connected cameras using rpicam-hello
+    exe = shutil.which("rpicam-hello")
+    if not exe:
+        print("[CAMERA] rpicam-hello not found in PATH")
+        return
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            exe, "--list-cameras", stdout=PIPE, stderr=PIPE
+        )
+        out, err = await proc.communicate()
+        if out:
+            print("[CAMERA] rpicam-hello --list-cameras:\n" + out.decode(errors='ignore'))
+        if err:
+            print("[CAMERA] stderr:\n" + err.decode(errors='ignore'))
+    except Exception as e:
+        print(f"[CAMERA] list cameras failed: {e}")
+
+async def _capture_once(camera_index: int, output_path: pathlib.Path) -> bool:
+    # Use rpicam-still for immediate single capture
+    exe = shutil.which("rpicam-still")
+    if not exe:
+        print("[CAMERA] rpicam-still not found in PATH")
+        return False
+    try:
+        # Use minimal timeout and no preview for quick shot
+        # Some versions support --immediate; using -t 1 for compatibility
+        proc = await asyncio.create_subprocess_exec(
+            exe,
+            "--camera", str(camera_index),
+            "-n",
+            "-t", "1",
+            "-o", str(output_path),
+            stdout=PIPE, stderr=PIPE,
+        )
+        out, err = await proc.communicate()
+        if proc.returncode != 0:
+            print(f"[CAMERA] capture failed (cam {camera_index}): rc={proc.returncode}\n{err.decode(errors='ignore')}")
+            return False
+        return True
+    except Exception as e:
+        print(f"[CAMERA] capture exception (cam {camera_index}): {e}")
+        return False
+
+async def _capture_loop(stop_event: asyncio.Event, interval_seconds: float = 2.0):
+    print("[CAMERA] Capture loop started")
+    _ensure_capture_dirs()
+    await _list_cameras()
+    next_time = asyncio.get_event_loop().time()
+    while not stop_event.is_set():
+        # Generate a shared timestamp for both images
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # millisecond precision
+        noir_path = NOIR_DIR / f"{ts}_noir.jpg"
+        rgb_path = RGB_DIR / f"{ts}_rgb.jpg"
+
+        # Launch both captures concurrently
+        t1 = asyncio.create_task(_capture_once(0, noir_path))
+        t2 = asyncio.create_task(_capture_once(1, rgb_path))
+        try:
+            res1, res2 = await asyncio.wait_for(asyncio.gather(t1, t2), timeout=max(3.0, interval_seconds))
+            if not res1:
+                print(f"[CAMERA] Noir capture failed for {noir_path}")
+            if not res2:
+                print(f"[CAMERA] RGB capture failed for {rgb_path}")
+        except asyncio.TimeoutError:
+            print("[CAMERA] Capture timed out")
+        except Exception as e:
+            print(f"[CAMERA] Capture error: {e}")
+
+        # Maintain ~0.5 FPS total (every 2 seconds)
+        next_time += interval_seconds
+        delay = max(0.0, next_time - asyncio.get_event_loop().time())
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+
+    print("[CAMERA] Capture loop stopped")
 
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket):
@@ -192,17 +292,27 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
 
     elif msg_type == "start_capture":
         print("[CAMERA] Received start_capture command")
-        await broadcast_message({
-            "type": "camera_status",
-            "status": "capture_started"
-        })
+        global capture_task, capture_stop_event
+        if capture_task and not capture_task.done():
+            print("[CAMERA] Capture already running")
+        else:
+            capture_stop_event = asyncio.Event()
+            capture_task = asyncio.create_task(_capture_loop(capture_stop_event, interval_seconds=2.0))
+        await broadcast_message({"type": "camera_status", "status": "capture_started"})
 
     elif msg_type == "stop_capture":
         print("[CAMERA] Received stop_capture command")
-        await broadcast_message({
-            "type": "camera_status",
-            "status": "capture_stopped"
-        })
+        global capture_task, capture_stop_event
+        if capture_stop_event is not None:
+            capture_stop_event.set()
+        if capture_task is not None:
+            try:
+                await asyncio.wait_for(capture_task, timeout=5.0)
+            except Exception:
+                capture_task.cancel()
+        capture_task = None
+        capture_stop_event = None
+        await broadcast_message({"type": "camera_status", "status": "capture_stopped"})
 
     elif msg_type == "upload_mission":
         # Expected payload: { "type": "upload_mission", "waypoints": [ {"latitude": .., "longitude": ..}, ... ] }
