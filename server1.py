@@ -179,6 +179,7 @@ async def websocket_endpoint(websocket: WebSocket):
 async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
     global is_mission_active, mission_waypoints, current_waypoint_index, mission_progress
     global drone_latitude, drone_longitude
+    global capture_task, capture_stop_event
     
     msg_type = message.get("type")
     
@@ -292,7 +293,6 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
 
     elif msg_type == "start_capture":
         print("[CAMERA] Received start_capture command")
-        global capture_task, capture_stop_event
         if capture_task and not capture_task.done():
             print("[CAMERA] Capture already running")
         else:
@@ -302,7 +302,6 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
 
     elif msg_type == "stop_capture":
         print("[CAMERA] Received stop_capture command")
-        global capture_task, capture_stop_event
         if capture_stop_event is not None:
             capture_stop_event.set()
         if capture_task is not None:
