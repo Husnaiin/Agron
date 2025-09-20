@@ -29,7 +29,7 @@ drone_longitude = 0.0
 drone_altitude = 0.0
 drone_speed = 0.0
 drone_heading = 0.0
-drone_battery = 0
+drone_battery = 100
 drone_spray = 100
 
 # Track last known good coordinates (even if GPS has no current fix)
@@ -52,6 +52,7 @@ mavlink_pause_since = 0.0
 # Capture control
 capture_task: asyncio.Task | None = None
 capture_stop_event: asyncio.Event | None = None
+capture_frame_counter: int = 0
 
 NOIR_DIR = pathlib.Path("/home/agron/Agron/noir")
 RGB_DIR = pathlib.Path("/home/agron/Agron/rgb")
@@ -95,6 +96,8 @@ async def _capture_once(camera_index: int, output_path: pathlib.Path) -> bool:
             "--camera", str(camera_index),
             "-n",
             "-t", "1",
+            # "--shutter", "2000", # 1/1000s exposure
+            # "--gain", "8",       # boost if light is low (tweak as needed)
             "-o", str(output_path),
             stdout=PIPE, stderr=PIPE,
         )
@@ -114,9 +117,17 @@ async def _capture_loop(stop_event: asyncio.Event, interval_seconds: float = 2.0
     next_time = asyncio.get_event_loop().time()
     while not stop_event.is_set():
         # Generate a shared timestamp for both images
+        global capture_frame_counter
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # millisecond precision
-        noir_path = NOIR_DIR / f"{ts}_noir.jpg"
-        rgb_path = RGB_DIR / f"{ts}_rgb.jpg"
+        alt_int = 0
+        try:
+            alt_int = int(math.ceil(float(drone_altitude)))
+        except Exception:
+            alt_int = 0
+        frame_no = capture_frame_counter + 1
+        base = f"{ts}_{frame_no}_{alt_int}"
+        noir_path = NOIR_DIR / f"{base}_noir.jpg"
+        rgb_path = RGB_DIR / f"{base}_rgb.jpg"
 
         # Launch both captures concurrently
         t1 = asyncio.create_task(_capture_once(0, noir_path))
@@ -131,6 +142,8 @@ async def _capture_loop(stop_event: asyncio.Event, interval_seconds: float = 2.0
             print("[CAMERA] Capture timed out")
         except Exception as e:
             print(f"[CAMERA] Capture error: {e}")
+        finally:
+            capture_frame_counter = frame_no
 
         # Maintain ~0.5 FPS total (every 2 seconds)
         next_time += interval_seconds
@@ -296,6 +309,8 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
         if capture_task and not capture_task.done():
             print("[CAMERA] Capture already running")
         else:
+            global capture_frame_counter
+            capture_frame_counter = 0
             capture_stop_event = asyncio.Event()
             capture_task = asyncio.create_task(_capture_loop(capture_stop_event, interval_seconds=2.0))
         await broadcast_message({"type": "camera_status", "status": "capture_started"})
