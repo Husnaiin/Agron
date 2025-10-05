@@ -43,6 +43,7 @@ class _MissionControlsState extends State<MissionControls> {
                     labelText: 'Mission Type',
                     border: OutlineInputBorder(),
                   ),
+                  isExpanded: true,
                   items: const [
                     DropdownMenuItem(
                       value: 'inspection',
@@ -52,25 +53,41 @@ class _MissionControlsState extends State<MissionControls> {
                       value: 'spraying',
                       child: Text('Spraying'),
                     ),
+                    DropdownMenuItem(
+                      value: 'dense_inspection',
+                      child: Text('Dense Inspection'),
+                    ),
                   ],
-                  onChanged: _isMissionActive ? null : (value) {
-                    if (value != null) {
-                      setState(() => _selectedMissionType = value);
-                    }
-                  },
+                  onChanged: _isMissionActive
+                      ? null
+                      : (value) {
+                          if (value != null) {
+                            setState(() => _selectedMissionType = value);
+                            context
+                                .read<DroneService>()
+                                .setSelectedMissionType(value);
+                          }
+                        },
                 ),
               ),
               const SizedBox(width: 16),
-              ElevatedButton(
-                onPressed: _isMissionActive ? null : () => _startMission(droneService),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 16,
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: ElevatedButton(
+                    onPressed: _isMissionActive
+                        ? null
+                        : () => _startMission(droneService),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 14,
+                      ),
+                    ),
+                    child: const Text('Start Mission'),
                   ),
                 ),
-                child: const Text('Start Mission'),
               ),
             ],
           ),
@@ -106,7 +123,9 @@ class _MissionControlsState extends State<MissionControls> {
     final mission = droneService.currentMission;
     if (mission == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save a mission first using the save button in the map controls')),
+        const SnackBar(
+            content: Text(
+                'Please save a mission first using the save button in the map controls')),
       );
       return;
     }
@@ -154,4 +173,4 @@ class _MissionControlsState extends State<MissionControls> {
       _isPaused = false;
     });
   }
-} 
+}

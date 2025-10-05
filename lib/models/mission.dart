@@ -14,19 +14,19 @@ class MissionWaypoint {
   });
 
   Map<String, dynamic> toJson() => {
-    'position': {
-      'latitude': position.latitude,
-      'longitude': position.longitude,
-    },
-    'altitude': altitude,
-    'sprayRate': sprayRate,
-    'sprayEnabled': sprayEnabled,
-  };
+        'position': {
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+        },
+        'altitude': altitude,
+        'sprayRate': sprayRate,
+        'sprayEnabled': sprayEnabled,
+      };
 
   factory MissionWaypoint.fromJson(Map<String, dynamic> json) {
     // Handle both formats (with position object or direct lat/lng)
     double lat, lng;
-    
+
     if (json.containsKey('position')) {
       lat = json['position']['latitude'] as double;
       lng = json['position']['longitude'] as double;
@@ -34,7 +34,7 @@ class MissionWaypoint {
       lat = json['latitude'] as double;
       lng = json['longitude'] as double;
     }
-    
+
     return MissionWaypoint(
       position: LatLng(lat, lng),
       altitude: json['altitude'] as double,
@@ -66,39 +66,33 @@ class Mission {
   });
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'name': name,
-    'waypoints': waypoints.map((w) => w.toJson()).toList(),
-    'defaultAltitude': defaultAltitude,
-    'defaultSprayRate': defaultSprayRate,
-    'createdAt': createdAt.toIso8601String(),
-    'completedAt': completedAt?.toIso8601String(),
-    'status': status.toString().split('.').last,
-  };
+        'id': id,
+        'name': name,
+        'waypoints': waypoints.map((w) => w.toJson()).toList(),
+        'defaultAltitude': defaultAltitude,
+        'defaultSprayRate': defaultSprayRate,
+        'createdAt': createdAt.toIso8601String(),
+        'completedAt': completedAt?.toIso8601String(),
+        'status': status.toString().split('.').last,
+      };
 
   factory Mission.fromJson(Map<String, dynamic> json) => Mission(
-    id: json['id'] as String,
-    name: json['name'] as String,
-    waypoints: (json['waypoints'] as List)
-        .map((w) => MissionWaypoint.fromJson(w as Map<String, dynamic>))
-        .toList(),
-    defaultAltitude: json['defaultAltitude'] as double,
-    defaultSprayRate: json['defaultSprayRate'] as double,
-    createdAt: DateTime.parse(json['createdAt'] as String),
-    completedAt: json['completedAt'] != null 
-        ? DateTime.parse(json['completedAt'] as String) 
-        : null,
-    status: MissionStatus.values.firstWhere(
-      (e) => e.toString().split('.').last == json['status'],
-      orElse: () => MissionStatus.pending,
-    ),
-  );
+        id: json['id'] as String,
+        name: json['name'] as String,
+        waypoints: (json['waypoints'] as List)
+            .map((w) => MissionWaypoint.fromJson(w as Map<String, dynamic>))
+            .toList(),
+        defaultAltitude: json['defaultAltitude'] as double,
+        defaultSprayRate: json['defaultSprayRate'] as double,
+        createdAt: DateTime.parse(json['createdAt'] as String),
+        completedAt: json['completedAt'] != null
+            ? DateTime.parse(json['completedAt'] as String)
+            : null,
+        status: MissionStatus.values.firstWhere(
+          (e) => e.toString().split('.').last == json['status'],
+          orElse: () => MissionStatus.pending,
+        ),
+      );
 }
 
-enum MissionStatus {
-  pending,
-  inProgress,
-  completed,
-  failed,
-  aborted
-} 
+enum MissionStatus { pending, inProgress, completed, failed, aborted }
