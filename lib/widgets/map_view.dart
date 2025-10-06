@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'dart:ui' as ui;
-import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+// import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
+// import 'package:geolocator/geolocator.dart';
+// import 'package:flutter_svg/flutter_svg.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
@@ -91,6 +91,12 @@ class _MapViewState extends State<MapView> {
   Timer? _connectionTimer;
   bool _isCapturing = false;
 
+  // Dense inspection preview
+  final List<LatLng> _densePathPoints = [];
+  double _surveyAltitude = 20.0; // meters, can be made user-adjustable later
+  bool _showDirectionArrows = true; // UI toggle for dense preview arrows
+  double _arrowPixelSize = 38.0; // Adjust arrow size (px) for Dense preview
+
   // Simple compass painter uses heading in degrees
   // Renders a dial with a red north arrow rotated by heading
 
@@ -133,6 +139,176 @@ class _MapViewState extends State<MapView> {
     lower.removeLast();
     upper.removeLast();
     return [...lower, ...upper];
+  }
+
+  // Compute camera footprint and spacing given altitude and FOVs
+  // Defaults approximate IMX219: ~62.2° horiz, ~48.8° vert
+  ({
+    double footprintWidthM,
+    double footprintHeightM,
+    double acrossTrackSpacingM,
+    double alongTrackSpacingM
+  }) _computeFootprintAndSpacing({
+    required double altitudeM,
+    double horizontalFovDeg = 62.2,
+    double verticalFovDeg = 48.8,
+    double forwardOverlap = 0.70,
+  }) {
+    final horiz = horizontalFovDeg * pi / 180.0;
+    final vert = verticalFovDeg * pi / 180.0;
+    final footprintW = 2.0 * altitudeM * tan(horiz / 2.0);
+    final footprintH = 2.0 * altitudeM * tan(vert / 2.0);
+    // Lateral spacing: approx 70% of footprint width; for 20 m altitude use fixed 16.8 m
+    double across = footprintW * 0.70;
+    if ((altitudeM - 20.0).abs() <= 0.6) {
+      across = 16.8; // meters at 20 m altitude
+    }
+    final along = footprintH * (1.0 - forwardOverlap);
+    return (
+      footprintWidthM: footprintW,
+      footprintHeightM: footprintH,
+      acrossTrackSpacingM: across,
+      alongTrackSpacingM: along,
+    );
+  }
+
+  // Convert meters to degrees latitude at given latitude
+  double _metersToDegreesLat(double meters) {
+    return meters / 111320.0;
+  }
+
+  // Convert meters to degrees longitude at given latitude
+  double _metersToDegreesLon(double meters, double atLatitudeDeg) {
+    final mPerDeg = 111320.0 * cos(atLatitudeDeg * pi / 180.0);
+    if (mPerDeg.abs() < 1e-9) return 0.0;
+    return meters / mPerDeg;
+  }
+
+  // Compute initial bearing (degrees) from point a to b (0..360, 0 = North)
+  double _bearingDegrees(LatLng a, LatLng b) {
+    final lat1 = a.latitude * pi / 180.0;
+    final lat2 = b.latitude * pi / 180.0;
+    final dLon = (b.longitude - a.longitude) * pi / 180.0;
+    final y = sin(dLon) * cos(lat2);
+    final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+    double brng = atan2(y, x) * 180.0 / pi; // -180..+180
+    if (brng < 0) brng += 360.0;
+    return brng; // 0..360
+  }
+
+  // Generate boustrophedon coverage waypoints for a convex polygon via horizontal scanlines
+  List<LatLng> _generateDenseInspectionPath(List<LatLng> hull, double altitudeM,
+      {LatLng? startPoint, bool returnToStart = true}) {
+    if (hull.length < 3) return const <LatLng>[];
+
+    final spacing = _computeFootprintAndSpacing(altitudeM: altitudeM);
+    // Determine scanline step (across-track) in degrees latitude
+    final dLat = _metersToDegreesLat(spacing.acrossTrackSpacingM);
+
+    // Bounding box
+    double minLat = hull.first.latitude, maxLat = hull.first.latitude;
+    for (final p in hull) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+    }
+
+    // Utility: compute intersections of horizontal line (at lat) with polygon edges -> list of longitudes
+    List<double> intersectionsAtLat(double lat) {
+      final List<double> xs = [];
+      for (int i = 0; i < hull.length; i++) {
+        final a = hull[i];
+        final b = hull[(i + 1) % hull.length];
+        final latA = a.latitude;
+        final latB = b.latitude;
+        final lonA = a.longitude;
+        final lonB = b.longitude;
+
+        // Check if horizontal line intersects edge [a,b]
+        final minY = min(latA, latB);
+        final maxY = max(latA, latB);
+        if (lat < minY || lat > maxY) continue;
+        // Avoid double counting vertices by excluding the top endpoint
+        if (lat == maxY) continue;
+
+        if ((latB - latA).abs() < 1e-12) {
+          // Horizontal edge: add span (we'll treat by adding both endpoints)
+          xs.addAll([lonA, lonB]);
+          continue;
+        }
+        final t = (lat - latA) / (latB - latA);
+        final x = lonA + t * (lonB - lonA);
+        xs.add(x);
+      }
+      xs.sort();
+      return xs;
+    }
+
+    // Along-track step in longitude depends on latitude of the row
+    double dLonForLat(double lat) {
+      return _metersToDegreesLon(spacing.alongTrackSpacingM, lat);
+    }
+
+    final List<LatLng> result = [];
+    bool reverse = false;
+    // Start from minLat and move up
+    for (double y = minLat; y <= maxLat + 1e-9; y += dLat) {
+      final xs = intersectionsAtLat(y);
+      if (xs.length < 2) continue;
+      // Pair up intersections into segments
+      for (int k = 0; k + 1 < xs.length; k += 2) {
+        double x0 = xs[k];
+        double x1 = xs[k + 1];
+        if (x1 < x0) {
+          final tmp = x0;
+          x0 = x1;
+          x1 = tmp;
+        }
+
+        final stepLon = dLonForLat(y).abs();
+        if (stepLon <= 0) continue;
+
+        List<LatLng> row = [];
+        // Build points along the segment
+        for (double x = x0; x <= x1 + 1e-12; x += stepLon) {
+          row.add(LatLng(y, x));
+        }
+        // Ensure last endpoint included exactly
+        if (row.isEmpty || (row.last.longitude - x1).abs() > 1e-9) {
+          row.add(LatLng(y, x1));
+        }
+
+        if (reverse) {
+          row = row.reversed.toList();
+        }
+        result.addAll(row);
+        reverse = !reverse; // alternate direction for boustrophedon
+      }
+    }
+    // If a start point is provided, reorder to nearest entry and add start/return
+    if (startPoint != null && result.isNotEmpty) {
+      int nearestIdx = 0;
+      double best = double.infinity;
+      for (int i = 0; i < result.length; i++) {
+        final d = _calculateDistance(startPoint, result[i]);
+        if (d < best) {
+          best = d;
+          nearestIdx = i;
+        }
+      }
+      if (nearestIdx != 0) {
+        final reordered = <LatLng>[];
+        reordered.addAll(result.sublist(nearestIdx));
+        reordered.addAll(result.sublist(0, nearestIdx));
+        result
+          ..clear()
+          ..addAll(reordered);
+      }
+      result.insert(0, startPoint);
+      if (returnToStart) {
+        result.add(startPoint);
+      }
+    }
+    return result;
   }
 
   @override
@@ -268,17 +444,18 @@ class _MapViewState extends State<MapView> {
       return null;
     }
 
-    // Build waypoint list ensuring first waypoint is current drone location
+    // Build waypoint list: first = current drone location, then user-selected points
     final List<LatLng> combinedPoints = [];
     if (_droneLocation != null) {
       combinedPoints.add(_droneLocation!);
     }
-    // Avoid immediate duplicate if user first point equals drone location
+    // Avoid immediate duplicate if user first point equals last added point
     bool isSamePoint(LatLng a, LatLng b) {
       const double epsilon = 1e-6;
       return (a.latitude - b.latitude).abs() < epsilon &&
           (a.longitude - b.longitude).abs() < epsilon;
     }
+
     for (final p in _points) {
       if (combinedPoints.isEmpty || !isSamePoint(combinedPoints.last, p)) {
         combinedPoints.add(p);
@@ -323,14 +500,19 @@ class _MapViewState extends State<MapView> {
     // Listen to service to rebuild UI on state changes
     final service = Provider.of<DroneService>(context);
     final isMissionActive = service.isMissionActive;
-    final missionPoints =
-        service.currentMission?.waypoints.map((w) => w.position).toList() ??
-            _points;
+    final missionPoints = service.currentMission != null
+        ? service.currentMission!.waypoints.map((w) => w.position).toList()
+        : _points;
     final hullPoints = missionPoints.isNotEmpty
         ? _computeConvexHull(missionPoints)
         : <LatLng>[];
-    final drawingHullPoints =
-        _points.isNotEmpty ? _computeConvexHull(_points) : <LatLng>[];
+    // While drawing, include drone location as the first point in the hull preview
+    final List<LatLng> drawingBasePoints = [];
+    if (_droneLocation != null) drawingBasePoints.add(_droneLocation!);
+    drawingBasePoints.addAll(_points);
+    final drawingHullPoints = drawingBasePoints.isNotEmpty
+        ? _computeConvexHull(drawingBasePoints)
+        : <LatLng>[];
 
     return Stack(
       children: [
@@ -358,7 +540,8 @@ class _MapViewState extends State<MapView> {
                     point: _droneLocation!,
                     width: 48,
                     height: 48,
-                    child: _QuadcopterMarker(headingDegrees: _lastTelemetry?.heading ?? 0),
+                    child: _QuadcopterMarker(
+                        headingDegrees: _lastTelemetry?.heading ?? 0),
                   ),
                 ],
               ),
@@ -384,6 +567,34 @@ class _MapViewState extends State<MapView> {
                   ),
                 ],
               ),
+              if (Provider.of<DroneService>(context, listen: true)
+                          .selectedMissionType ==
+                      'dense_inspection' &&
+                  drawingHullPoints.length >= 3) ...[
+                // Compute and render dense inspection preview
+                Builder(builder: (context) {
+                  _densePathPoints
+                    ..clear()
+                    ..addAll(_generateDenseInspectionPath(
+                        drawingHullPoints, _surveyAltitude,
+                        startPoint: _droneLocation, returnToStart: true));
+                  return PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: _densePathPoints,
+                        color: Colors.purple,
+                        strokeWidth: 3,
+                        isDotted: true,
+                      ),
+                    ],
+                  );
+                }),
+                if (_showDirectionArrows)
+                  MarkerLayer(
+                    markers: _buildMidpointArrows(_densePathPoints,
+                        color: Colors.purple),
+                  ),
+              ],
               MarkerLayer(
                 markers: _points
                     .asMap()
@@ -430,6 +641,41 @@ class _MapViewState extends State<MapView> {
                   ),
                 ],
               ),
+              if (service.selectedMissionType == 'dense_inspection') ...[
+                // Show dense path preview derived from stored user points
+                Builder(builder: (context) {
+                  _densePathPoints
+                    ..clear()
+                    ..addAll(_generateDenseInspectionPath(
+                        hullPoints, _surveyAltitude,
+                        startPoint: _droneLocation, returnToStart: true));
+                  return PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: _densePathPoints,
+                        color: Colors.purple,
+                        strokeWidth: 3,
+                        isDotted: true,
+                      ),
+                    ],
+                  );
+                }),
+                if (_showDirectionArrows)
+                  MarkerLayer(
+                    markers: _buildMidpointArrows(_densePathPoints,
+                        color: Colors.purple),
+                  ),
+              ] else if (service.selectedMissionType == 'inspection') ...[
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: hullPoints,
+                      color: Colors.green,
+                      strokeWidth: 2,
+                    ),
+                  ],
+                ),
+              ],
             ],
           ],
         ),
@@ -580,12 +826,14 @@ class _MapViewState extends State<MapView> {
                       if (_isCapturing) {
                         await _droneService.sendCaptureCommand('start_capture');
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Camera capture started')),
+                          const SnackBar(
+                              content: Text('Camera capture started')),
                         );
                       } else {
                         await _droneService.sendCaptureCommand('stop_capture');
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Camera capture stopped')),
+                          const SnackBar(
+                              content: Text('Camera capture stopped')),
                         );
                       }
                     } catch (e) {
@@ -734,6 +982,50 @@ class _MapViewState extends State<MapView> {
     }
   }
 
+  // removed unused _buildDirectionMarkers
+
+  // Build a small arrow at the midpoint of each segment to indicate direction
+  List<Marker> _buildMidpointArrows(List<LatLng> path,
+      {Color color = Colors.purple,
+      double minSegmentLengthMeters = 3.0,
+      int maxArrows = 1000,
+      double? pixelSize}) {
+    if (path.length < 2) return const <Marker>[];
+    final List<Marker> arrows = [];
+    final double sizePx = pixelSize ?? _arrowPixelSize;
+    for (int i = 0; i + 1 < path.length; i++) {
+      final a = path[i];
+      final b = path[i + 1];
+      // Skip very short segments to reduce clutter
+      if (_calculateDistance(a, b) < minSegmentLengthMeters) continue;
+      if (arrows.length >= maxArrows) break;
+      final mid = LatLng(
+          (a.latitude + b.latitude) * 0.5, (a.longitude + b.longitude) * 0.5);
+      final bearingDeg = _bearingDegrees(a, b); // 0..360 (0=N)
+      // Icons.arrow_right_alt points to the right (East), rotate from North by (bearing - 90)
+      final angleRad = (bearingDeg - 90.0) * pi / 180.0;
+      arrows.add(
+        Marker(
+          point: mid,
+          width: sizePx,
+          height: sizePx,
+          child: Opacity(
+            opacity: 0.7,
+            child: Transform.rotate(
+              angle: angleRad,
+              child: Icon(
+                Icons.arrow_right_alt,
+                color: color,
+                size: sizePx,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return arrows;
+  }
+
   Future<void> _saveMission() async {
     final mission = await _createMission();
     if (mission != null) {
@@ -815,8 +1107,8 @@ class _CompassPainter extends CustomPainter {
       final angle = (i * 30) * pi / 180;
       final p1 = Offset(center.dx + (radius - 6) * cos(angle),
           center.dy + (radius - 6) * sin(angle));
-      final p2 = Offset(center.dx + radius * cos(angle),
-          center.dy + radius * sin(angle));
+      final p2 = Offset(
+          center.dx + radius * cos(angle), center.dy + radius * sin(angle));
       canvas.drawLine(p1, p2, tickPaint);
     }
 
