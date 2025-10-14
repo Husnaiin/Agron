@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
@@ -159,9 +160,12 @@ class DroneService extends ChangeNotifier {
       return xs;
     }
 
-    double dLonFor(double lat) =>
-        _metersToDegreesLon(spacing.alongTrackSpacingM, lat);
-    final List<LatLng> result = [];
+    // Along-track step in longitude depends on latitude of the row
+    double dLonForLat(double lat) {
+      return _metersToDegreesLon(spacing.alongTrackSpacingM, lat);
+    }
+
+    final List<LatLng> fullPath = [];
     bool reverse = false;
     for (double y = minLat; y <= maxLat + 1e-9; y += dLat) {
       final xs = intersectionsAtLat(y);
@@ -174,7 +178,7 @@ class DroneService extends ChangeNotifier {
           x0 = x1;
           x1 = t;
         }
-        final stepLon = dLonFor(y).abs();
+        final stepLon = dLonForLat(y).abs();
         if (stepLon <= 0) continue;
         List<LatLng> row = [];
         for (double x = x0; x <= x1 + 1e-12; x += stepLon) {
@@ -184,11 +188,15 @@ class DroneService extends ChangeNotifier {
           row.add(LatLng(y, x1));
         }
         if (reverse) row = row.reversed.toList();
-        result.addAll(row);
+        fullPath.addAll(row);
         reverse = !reverse;
       }
     }
-    // If a start point is provided, reorder path to start from nearest point
+
+    // Optimize path by keeping only corner/edge points
+    final List<LatLng> result = _optimizePath(fullPath);
+
+    // If a start point is provided, reorder to nearest entry and add start/return
     if (startPoint != null && result.isNotEmpty) {
       int nearestIdx = 0;
       double best = double.infinity;
@@ -207,13 +215,65 @@ class DroneService extends ChangeNotifier {
           ..clear()
           ..addAll(reordered);
       }
-      // Prepend the exact start point as the first waypoint
       result.insert(0, startPoint);
-      if (returnToStart) {
-        result.add(startPoint);
+      // NOTE: We DON'T add the start point at the end because RTL will handle return
+    }
+
+    debugPrint(
+        'Dense path generated: ${result.length} waypoints (RTL will handle return)');
+    return result;
+  }
+
+  /// Optimizes path by removing intermediate points along straight lines,
+  /// keeping only corner/edge points where direction changes
+  List<LatLng> _optimizePath(List<LatLng> fullPath) {
+    if (fullPath.length <= 2) return fullPath;
+
+    final List<LatLng> optimized = [];
+    optimized.add(fullPath.first); // Always keep first point
+
+    for (int i = 1; i < fullPath.length - 1; i++) {
+      final prev = fullPath[i - 1];
+      final curr = fullPath[i];
+      final next = fullPath[i + 1];
+
+      // Check if we're in a straight line (same latitude or same longitude)
+      final sameLatAsPrev = (curr.latitude - prev.latitude).abs() < 1e-9;
+      final sameLatAsNext = (curr.latitude - next.latitude).abs() < 1e-9;
+      final sameLonAsPrev = (curr.longitude - prev.longitude).abs() < 1e-9;
+      final sameLonAsNext = (curr.longitude - next.longitude).abs() < 1e-9;
+
+      // Keep point if:
+      // 1. It's the end of a row (latitude changes)
+      // 2. It's a corner (both lat and lon change)
+      // 3. It's the start of a new row
+      final isEndOfRow = sameLatAsPrev && !sameLatAsNext;
+      final isStartOfRow = !sameLatAsPrev && sameLatAsNext;
+      final isCorner = !sameLatAsPrev && !sameLatAsNext;
+
+      if (isEndOfRow || isStartOfRow || isCorner) {
+        optimized.add(curr);
       }
     }
-    return result;
+
+    optimized.add(fullPath.last); // Always keep last point
+
+    debugPrint(
+        'Path optimization: ${fullPath.length} -> ${optimized.length} waypoints');
+    return optimized;
+  }
+
+  /// Calculate bearing between two points in degrees
+  double _calculateBearing(LatLng from, LatLng to) {
+    final lat1 = from.latitude * pi / 180;
+    final lat2 = to.latitude * pi / 180;
+    final deltaLon = (to.longitude - from.longitude) * pi / 180;
+
+    final y = sin(deltaLon) * cos(lat2);
+    final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(deltaLon);
+
+    final bearing = atan2(y, x) * 180 / pi;
+    return (bearing + 360) % 360; // Normalize to 0-360
   }
 
   double _haversineMeters(LatLng a, LatLng b) {
@@ -228,10 +288,46 @@ class DroneService extends ChangeNotifier {
     return R * c;
   }
 
+  void _logGeneratedWaypoints(
+      List<MissionWaypoint> waypoints, String missionType) {
+    try {
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final filename = '${missionType}_${timestamp}.txt';
+      final file = File(filename);
+
+      final buffer = StringBuffer();
+      buffer.writeln('Generated Waypoints - $missionType');
+      buffer.writeln('Timestamp: ${DateTime.now().toIso8601String()}');
+      buffer.writeln('Total waypoints: ${waypoints.length}');
+      buffer.writeln('=' * 50);
+      buffer.writeln();
+
+      for (int i = 0; i < waypoints.length; i++) {
+        final wp = waypoints[i];
+        buffer.writeln('Waypoint ${i + 1}:');
+        buffer.writeln('  Latitude: ${wp.position.latitude}');
+        buffer.writeln('  Longitude: ${wp.position.longitude}');
+        buffer.writeln('  Altitude: ${wp.altitude}');
+        buffer.writeln('  Spray Rate: ${wp.sprayRate}');
+        buffer.writeln('  Spray Enabled: ${wp.sprayEnabled}');
+        buffer.writeln();
+      }
+
+      buffer.writeln('=' * 50);
+      buffer.writeln('Raw JSON:');
+      buffer.writeln(json.encode(waypoints.map((w) => w.toJson()).toList()));
+
+      file.writeAsStringSync(buffer.toString());
+      debugPrint('Waypoints logged to: $filename');
+    } catch (e) {
+      debugPrint('Failed to log waypoints: $e');
+    }
+  }
+
   Future<void> uploadMissionToAutopilot(Mission mission) async {
     try {
       // Derive waypoints per mission type on-the-fly
-      final effectiveWaypoints = _buildEffectiveWaypoints(mission);
+      final effectiveWaypoints = await _buildEffectiveWaypoints(mission);
       final missionJson = Mission(
         id: mission.id,
         name: mission.name,
@@ -263,44 +359,65 @@ class DroneService extends ChangeNotifier {
     }
   }
 
-  List<MissionWaypoint> _buildEffectiveWaypoints(Mission mission) {
+  Future<List<MissionWaypoint>> _buildEffectiveWaypoints(
+      Mission mission) async {
     final missionType = _selectedMissionType;
     final userPoints = mission.waypoints.map((w) => w.position).toList();
-    // Ensure first point is treated as drone start; compute from user points excluding first when building hull/path
-    final hasStart = userPoints.isNotEmpty;
-    final startPoint = hasStart ? userPoints.first : null;
-    final restPoints = hasStart ? userPoints.sublist(1) : <LatLng>[];
+
     if (userPoints.length < 3) return mission.waypoints;
 
     if (missionType == 'dense_inspection') {
-      final hull =
-          _computeConvexHull(restPoints.isNotEmpty ? restPoints : userPoints);
-      final path = _generateDensePath(hull, mission.defaultAltitude,
+      // For dense inspection, use all user points to compute convex hull
+      final hull = _computeConvexHull(userPoints);
+
+      // Get current drone position from telemetry or use first user point as fallback
+      LatLng? currentDronePosition;
+      try {
+        // Try to get current drone position from SharedPreferences (last known position)
+        final prefs = await SharedPreferences.getInstance();
+        final lat = prefs.getDouble('last_drone_latitude');
+        final lon = prefs.getDouble('last_drone_longitude');
+        if (lat != null && lon != null) {
+          currentDronePosition = LatLng(lat, lon);
+        }
+      } catch (e) {
+        debugPrint('Failed to get current drone position: $e');
+      }
+
+      // Use first user point as fallback if no current position available
+      final startPoint = currentDronePosition ?? userPoints.first;
+
+      // Generate dense path starting from current drone position
+      // Use 20.0m altitude to match MapView's _surveyAltitude for consistency
+      final path = _generateDensePath(hull, 20.0,
           startPoint: startPoint, returnToStart: true);
-      final effective = <MissionWaypoint>[];
-      effective.addAll(path
+
+      // Convert path points to mission waypoints
+      // Use 20.0m altitude to match the path generation altitude
+      final effective = path
           .map((p) => MissionWaypoint(
                 position: p,
-                altitude: mission.defaultAltitude,
+                altitude: 20.0, // Use same altitude as path generation
                 sprayRate: mission.defaultSprayRate,
                 sprayEnabled: true,
               ))
-          .toList());
+          .toList();
+
+      debugPrint(
+          'Dense inspection: Generated ${effective.length} waypoints starting from drone position');
+
+      // Log generated waypoints for comparison
+      _logGeneratedWaypoints(effective, 'dense_inspection_generated');
+
       return effective;
     }
 
     if (missionType == 'inspection') {
-      final hull =
-          _computeConvexHull(restPoints.isNotEmpty ? restPoints : userPoints);
+      // For simple inspection, use all user points to compute convex hull
+      final hull = _computeConvexHull(userPoints);
       final effective = <MissionWaypoint>[];
-      if (startPoint != null) {
-        effective.add(MissionWaypoint(
-          position: startPoint,
-          altitude: mission.defaultAltitude,
-          sprayRate: mission.defaultSprayRate,
-          sprayEnabled: true,
-        ));
-      }
+
+      // Add convex hull points as waypoints
       effective.addAll(hull
           .map((p) => MissionWaypoint(
                 position: p,
@@ -309,6 +426,13 @@ class DroneService extends ChangeNotifier {
                 sprayEnabled: true,
               ))
           .toList());
+
+      debugPrint(
+          'Simple inspection: Generated ${effective.length} waypoints from convex hull');
+
+      // Log generated waypoints for comparison
+      _logGeneratedWaypoints(effective, 'simple_inspection_generated');
+
       return effective;
     }
 
@@ -736,7 +860,7 @@ Timestamp: ${telemetry.timestamp}
           'Starting mission with waypoints: ${missionToStart.waypoints.length}');
 
       // Convert effective mission to JSON and print for debugging
-      final effectiveWaypoints = _buildEffectiveWaypoints(missionToStart);
+      final effectiveWaypoints = await _buildEffectiveWaypoints(missionToStart);
       final effectiveMission = Mission(
         id: missionToStart.id,
         name: missionToStart.name,
@@ -751,7 +875,7 @@ Timestamp: ${telemetry.timestamp}
       debugPrint('Mission JSON: ${json.encode(missionJson)}');
 
       // Print first waypoint for debugging
-      if (missionToStart.waypoints.isNotEmpty) {
+      if (effectiveWaypoints.isNotEmpty) {
         final firstWaypoint = effectiveWaypoints.first;
         debugPrint('First waypoint: ${json.encode(firstWaypoint.toJson())}');
       }

@@ -1,0 +1,1465 @@
+Waypoints uploaded to server
+Timestamp: 2025-10-14T06:47:45.720216
+Total waypoints: 91
+==================================================
+
+Waypoint 1:
+  Latitude: 40.7128075788961
+  Longitude: -74.00599776749982
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 2:
+  Latitude: 40.71286541499722
+  Longitude: -74.00604390492104
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 3:
+  Latitude: 40.71286541499722
+  Longitude: -74.00614067238207
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 4:
+  Latitude: 40.71286541499722
+  Longitude: -74.0062374398431
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 5:
+  Latitude: 40.71286541499722
+  Longitude: -74.00633420730414
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 6:
+  Latitude: 40.71286541499722
+  Longitude: -74.00643097476517
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 7:
+  Latitude: 40.71286541499722
+  Longitude: -74.0065277422262
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 8:
+  Latitude: 40.71309301129441
+  Longitude: -74.00660864644159
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 9:
+  Latitude: 40.71309301129441
+  Longitude: -74.00651187864977
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 10:
+  Latitude: 40.71309301129441
+  Longitude: -74.00641511085796
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 11:
+  Latitude: 40.71309301129441
+  Longitude: -74.00631834306614
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 12:
+  Latitude: 40.71309301129441
+  Longitude: -74.00622157527432
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 13:
+  Latitude: 40.71309301129441
+  Longitude: -74.00612480748251
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 14:
+  Latitude: 40.71309301129441
+  Longitude: -74.00602803969069
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 15:
+  Latitude: 40.71309301129441
+  Longitude: -74.00593127189887
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 16:
+  Latitude: 40.71309301129441
+  Longitude: -74.00583450410706
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 17:
+  Latitude: 40.71309301129441
+  Longitude: -74.00573773631524
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 18:
+  Latitude: 40.71309301129441
+  Longitude: -74.00564096852342
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 19:
+  Latitude: 40.71309301129441
+  Longitude: -74.0055442007316
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 20:
+  Latitude: 40.71309301129441
+  Longitude: -74.00544743293979
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 21:
+  Latitude: 40.71309301129441
+  Longitude: -74.00535066514797
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 22:
+  Latitude: 40.71309301129441
+  Longitude: -74.00525389735616
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 23:
+  Latitude: 40.71309301129441
+  Longitude: -74.00515712956434
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 24:
+  Latitude: 40.71309301129441
+  Longitude: -74.00506036177252
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 25:
+  Latitude: 40.71309301129441
+  Longitude: -74.00499876682066
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 26:
+  Latitude: 40.713320607591605
+  Longitude: -74.00510412077472
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 27:
+  Latitude: 40.713320607591605
+  Longitude: -74.00512314156448
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 28:
+  Latitude: 40.713320607591605
+  Longitude: -74.00521990968709
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 29:
+  Latitude: 40.713320607591605
+  Longitude: -74.00531667780969
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 30:
+  Latitude: 40.713320607591605
+  Longitude: -74.00541344593229
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 31:
+  Latitude: 40.713320607591605
+  Longitude: -74.0055102140549
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 32:
+  Latitude: 40.713320607591605
+  Longitude: -74.0056069821775
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 33:
+  Latitude: 40.713320607591605
+  Longitude: -74.0057037503001
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 34:
+  Latitude: 40.713320607591605
+  Longitude: -74.0058005184227
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 35:
+  Latitude: 40.713320607591605
+  Longitude: -74.0058972865453
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 36:
+  Latitude: 40.713320607591605
+  Longitude: -74.00599405466791
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 37:
+  Latitude: 40.713320607591605
+  Longitude: -74.00609082279051
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 38:
+  Latitude: 40.713320607591605
+  Longitude: -74.00618759091311
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 39:
+  Latitude: 40.713320607591605
+  Longitude: -74.00628435903572
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 40:
+  Latitude: 40.713320607591605
+  Longitude: -74.00638112715832
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 41:
+  Latitude: 40.713320607591605
+  Longitude: -74.00647789528092
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 42:
+  Latitude: 40.713320607591605
+  Longitude: -74.00657466340353
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 43:
+  Latitude: 40.713320607591605
+  Longitude: -74.00667143152613
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 44:
+  Latitude: 40.7135482038888
+  Longitude: -74.00547034067796
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 45:
+  Latitude: 40.7135482038888
+  Longitude: -74.00537357222457
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 46:
+  Latitude: 40.7135482038888
+  Longitude: -74.00527680377118
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 47:
+  Latitude: 40.7135482038888
+  Longitude: -74.00520947472876
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 48:
+  Latitude: 40.71218262610564
+  Longitude: -74.00628502958001
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 49:
+  Latitude: 40.71241022240283
+  Longitude: -74.00545381687014
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 50:
+  Latitude: 40.71241022240283
+  Longitude: -74.00549503260002
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 51:
+  Latitude: 40.71241022240283
+  Longitude: -74.00559179939951
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 52:
+  Latitude: 40.71241022240283
+  Longitude: -74.005688566199
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 53:
+  Latitude: 40.71241022240283
+  Longitude: -74.00578533299849
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 54:
+  Latitude: 40.71241022240283
+  Longitude: -74.00588209979797
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 55:
+  Latitude: 40.71241022240283
+  Longitude: -74.00597886659746
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 56:
+  Latitude: 40.71241022240283
+  Longitude: -74.00607563339695
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 57:
+  Latitude: 40.71241022240283
+  Longitude: -74.00617240019643
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 58:
+  Latitude: 40.71241022240283
+  Longitude: -74.00626916699592
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 59:
+  Latitude: 40.71241022240283
+  Longitude: -74.00636593379541
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 60:
+  Latitude: 40.712637818700024
+  Longitude: -74.0064468380108
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 61:
+  Latitude: 40.712637818700024
+  Longitude: -74.00635007088054
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 62:
+  Latitude: 40.712637818700024
+  Longitude: -74.00625330375028
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 63:
+  Latitude: 40.712637818700024
+  Longitude: -74.00615653662003
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 64:
+  Latitude: 40.712637818700024
+  Longitude: -74.00605976948977
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 65:
+  Latitude: 40.712637818700024
+  Longitude: -74.00596300235951
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 66:
+  Latitude: 40.712637818700024
+  Longitude: -74.00586623522925
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 67:
+  Latitude: 40.712637818700024
+  Longitude: -74.00576946809899
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 68:
+  Latitude: 40.712637818700024
+  Longitude: -74.00567270096873
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 69:
+  Latitude: 40.712637818700024
+  Longitude: -74.00557593383847
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 70:
+  Latitude: 40.712637818700024
+  Longitude: -74.00547916670821
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 71:
+  Latitude: 40.712637818700024
+  Longitude: -74.00538239957795
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 72:
+  Latitude: 40.712637818700024
+  Longitude: -74.0052856324477
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 73:
+  Latitude: 40.712637818700024
+  Longitude: -74.00518886531744
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 74:
+  Latitude: 40.712637818700024
+  Longitude: -74.00509209818718
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 75:
+  Latitude: 40.712637818700024
+  Longitude: -74.00499533105692
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 76:
+  Latitude: 40.712637818700024
+  Longitude: -74.00489856392666
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 77:
+  Latitude: 40.712637818700024
+  Longitude: -74.0048017967964
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 78:
+  Latitude: 40.712637818700024
+  Longitude: -74.00478805891257
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 79:
+  Latitude: 40.71286541499722
+  Longitude: -74.00489341286662
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 80:
+  Latitude: 40.71286541499722
+  Longitude: -74.0049794628497
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 81:
+  Latitude: 40.71286541499722
+  Longitude: -74.00507623031073
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 82:
+  Latitude: 40.71286541499722
+  Longitude: -74.00517299777177
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 83:
+  Latitude: 40.71286541499722
+  Longitude: -74.0052697652328
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 84:
+  Latitude: 40.71286541499722
+  Longitude: -74.00536653269383
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 85:
+  Latitude: 40.71286541499722
+  Longitude: -74.00546330015486
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 86:
+  Latitude: 40.71286541499722
+  Longitude: -74.00556006761589
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 87:
+  Latitude: 40.71286541499722
+  Longitude: -74.00565683507692
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 88:
+  Latitude: 40.71286541499722
+  Longitude: -74.00575360253795
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 89:
+  Latitude: 40.71286541499722
+  Longitude: -74.00585036999898
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 90:
+  Latitude: 40.71286541499722
+  Longitude: -74.00594713746001
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+Waypoint 91:
+  Latitude: 40.7128075788961
+  Longitude: -74.00599776749982
+  Altitude: 30.0
+  Spray Rate: 2.0
+  Spray Enabled: True
+
+==================================================
+Raw JSON:
+[
+  {
+    "position": {
+      "latitude": 40.7128075788961,
+      "longitude": -74.00599776749982
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00604390492104
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00614067238207
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.0062374398431
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00633420730414
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00643097476517
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.0065277422262
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00660864644159
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00651187864977
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00641511085796
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00631834306614
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00622157527432
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00612480748251
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00602803969069
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00593127189887
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00583450410706
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00573773631524
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00564096852342
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.0055442007316
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00544743293979
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00535066514797
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00525389735616
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00515712956434
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00506036177252
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71309301129441,
+      "longitude": -74.00499876682066
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00510412077472
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00512314156448
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00521990968709
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00531667780969
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00541344593229
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.0055102140549
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.0056069821775
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.0057037503001
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.0058005184227
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.0058972865453
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00599405466791
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00609082279051
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00618759091311
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00628435903572
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00638112715832
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00647789528092
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00657466340353
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.713320607591605,
+      "longitude": -74.00667143152613
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.7135482038888,
+      "longitude": -74.00547034067796
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.7135482038888,
+      "longitude": -74.00537357222457
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.7135482038888,
+      "longitude": -74.00527680377118
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.7135482038888,
+      "longitude": -74.00520947472876
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71218262610564,
+      "longitude": -74.00628502958001
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00545381687014
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00549503260002
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00559179939951
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.005688566199
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00578533299849
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00588209979797
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00597886659746
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00607563339695
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00617240019643
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00626916699592
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71241022240283,
+      "longitude": -74.00636593379541
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.0064468380108
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00635007088054
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00625330375028
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00615653662003
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00605976948977
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00596300235951
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00586623522925
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00576946809899
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00567270096873
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00557593383847
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00547916670821
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00538239957795
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.0052856324477
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00518886531744
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00509209818718
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00499533105692
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00489856392666
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.0048017967964
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.712637818700024,
+      "longitude": -74.00478805891257
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00489341286662
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.0049794628497
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00507623031073
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00517299777177
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.0052697652328
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00536653269383
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00546330015486
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00556006761589
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00565683507692
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00575360253795
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00585036999898
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.71286541499722,
+      "longitude": -74.00594713746001
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  },
+  {
+    "position": {
+      "latitude": 40.7128075788961,
+      "longitude": -74.00599776749982
+    },
+    "altitude": 30.0,
+    "sprayRate": 2.0,
+    "sprayEnabled": true
+  }
+]
