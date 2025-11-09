@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
@@ -29,6 +28,11 @@ class DroneService extends ChangeNotifier {
   Timer? _reconnectTimer;
   Timer? _connectionValidationTimer;
   String? _lastIpAddress;
+  bool _userInitiatedDisconnect = false;
+  bool _isMissionUploaded = false;
+  bool _isMissionFromHistory = false;
+  double? _targetAltitude;
+  double? _targetSpeed;
 
   Stream<Telemetry> get telemetryStream => _telemetryController.stream;
   bool get isConnected => _isConnected;
@@ -38,6 +42,20 @@ class DroneService extends ChangeNotifier {
   Mission? get currentMission => _currentMission;
   bool get isMissionActive => _isMissionActive;
   String get selectedMissionType => _selectedMissionType;
+  bool get isMissionUploaded => _isMissionUploaded;
+  bool get isMissionFromHistory => _isMissionFromHistory;
+  double? get targetAltitude => _targetAltitude;
+  double? get targetSpeed => _targetSpeed;
+
+  void setTargetAltitude(double? altitude) {
+    _targetAltitude = altitude;
+    notifyListeners();
+  }
+
+  void setTargetSpeed(double? speed) {
+    _targetSpeed = speed;
+    notifyListeners();
+  }
 
   void setSelectedMissionType(String type) {
     if (_selectedMissionType == type) return;
@@ -51,8 +69,13 @@ class DroneService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setMission(Mission mission) {
+  void setMission(Mission mission, {bool fromHistory = false}) {
     _currentMission = mission;
+    _isMissionFromHistory = fromHistory;
+    // Reset upload status when new mission is set (unless it's from history and already uploaded)
+    if (!fromHistory) {
+      _isMissionUploaded = false;
+    }
     notifyListeners();
   }
 
@@ -160,12 +183,9 @@ class DroneService extends ChangeNotifier {
       return xs;
     }
 
-    // Along-track step in longitude depends on latitude of the row
-    double dLonForLat(double lat) {
-      return _metersToDegreesLon(spacing.alongTrackSpacingM, lat);
-    }
-
-    final List<LatLng> fullPath = [];
+    double dLonFor(double lat) =>
+        _metersToDegreesLon(spacing.alongTrackSpacingM, lat);
+    List<LatLng> result = [];
     bool reverse = false;
     for (double y = minLat; y <= maxLat + 1e-9; y += dLat) {
       final xs = intersectionsAtLat(y);
@@ -178,7 +198,7 @@ class DroneService extends ChangeNotifier {
           x0 = x1;
           x1 = t;
         }
-        final stepLon = dLonForLat(y).abs();
+        final stepLon = dLonFor(y).abs();
         if (stepLon <= 0) continue;
         List<LatLng> row = [];
         for (double x = x0; x <= x1 + 1e-12; x += stepLon) {
@@ -188,15 +208,23 @@ class DroneService extends ChangeNotifier {
           row.add(LatLng(y, x1));
         }
         if (reverse) row = row.reversed.toList();
-        fullPath.addAll(row);
+        // Only add first and last point of each row (edge points of straight segment)
+        if (row.isNotEmpty) {
+          if (row.length == 1) {
+            result.add(row.first);
+          } else {
+            result.add(row.first);
+            result.add(row.last);
+          }
+        }
         reverse = !reverse;
       }
     }
 
-    // Optimize path by keeping only corner/edge points
-    final List<LatLng> result = _optimizePath(fullPath);
+    // Further simplify: remove intermediate points where direction change is minimal
+    result = _simplifyPath(result, minBearingChangeDeg: 5.0);
 
-    // If a start point is provided, reorder to nearest entry and add start/return
+    // If a start point is provided, reorder path to start from nearest point
     if (startPoint != null && result.isNotEmpty) {
       int nearestIdx = 0;
       double best = double.infinity;
@@ -215,65 +243,13 @@ class DroneService extends ChangeNotifier {
           ..clear()
           ..addAll(reordered);
       }
+      // Prepend the exact start point as the first waypoint
       result.insert(0, startPoint);
-      // NOTE: We DON'T add the start point at the end because RTL will handle return
-    }
-
-    debugPrint(
-        'Dense path generated: ${result.length} waypoints (RTL will handle return)');
-    return result;
-  }
-
-  /// Optimizes path by removing intermediate points along straight lines,
-  /// keeping only corner/edge points where direction changes
-  List<LatLng> _optimizePath(List<LatLng> fullPath) {
-    if (fullPath.length <= 2) return fullPath;
-
-    final List<LatLng> optimized = [];
-    optimized.add(fullPath.first); // Always keep first point
-
-    for (int i = 1; i < fullPath.length - 1; i++) {
-      final prev = fullPath[i - 1];
-      final curr = fullPath[i];
-      final next = fullPath[i + 1];
-
-      // Check if we're in a straight line (same latitude or same longitude)
-      final sameLatAsPrev = (curr.latitude - prev.latitude).abs() < 1e-9;
-      final sameLatAsNext = (curr.latitude - next.latitude).abs() < 1e-9;
-      final sameLonAsPrev = (curr.longitude - prev.longitude).abs() < 1e-9;
-      final sameLonAsNext = (curr.longitude - next.longitude).abs() < 1e-9;
-
-      // Keep point if:
-      // 1. It's the end of a row (latitude changes)
-      // 2. It's a corner (both lat and lon change)
-      // 3. It's the start of a new row
-      final isEndOfRow = sameLatAsPrev && !sameLatAsNext;
-      final isStartOfRow = !sameLatAsPrev && sameLatAsNext;
-      final isCorner = !sameLatAsPrev && !sameLatAsNext;
-
-      if (isEndOfRow || isStartOfRow || isCorner) {
-        optimized.add(curr);
+      if (returnToStart) {
+        result.add(startPoint);
       }
     }
-
-    optimized.add(fullPath.last); // Always keep last point
-
-    debugPrint(
-        'Path optimization: ${fullPath.length} -> ${optimized.length} waypoints');
-    return optimized;
-  }
-
-  /// Calculate bearing between two points in degrees
-  double _calculateBearing(LatLng from, LatLng to) {
-    final lat1 = from.latitude * pi / 180;
-    final lat2 = to.latitude * pi / 180;
-    final deltaLon = (to.longitude - from.longitude) * pi / 180;
-
-    final y = sin(deltaLon) * cos(lat2);
-    final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(deltaLon);
-
-    final bearing = atan2(y, x) * 180 / pi;
-    return (bearing + 360) % 360; // Normalize to 0-360
+    return result;
   }
 
   double _haversineMeters(LatLng a, LatLng b) {
@@ -288,52 +264,63 @@ class DroneService extends ChangeNotifier {
     return R * c;
   }
 
-  void _logGeneratedWaypoints(
-      List<MissionWaypoint> waypoints, String missionType) {
-    try {
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final filename = '${missionType}_${timestamp}.txt';
-      final file = File(filename);
+  // Compute bearing difference in degrees (0-180)
+  double _bearingDifference(LatLng a, LatLng b, LatLng c) {
+    final bearing1 = _bearingDegrees(a, b);
+    final bearing2 = _bearingDegrees(b, c);
+    double diff = (bearing2 - bearing1).abs();
+    if (diff > 180) diff = 360 - diff;
+    return diff;
+  }
 
-      final buffer = StringBuffer();
-      buffer.writeln('Generated Waypoints - $missionType');
-      buffer.writeln('Timestamp: ${DateTime.now().toIso8601String()}');
-      buffer.writeln('Total waypoints: ${waypoints.length}');
-      buffer.writeln('=' * 50);
-      buffer.writeln();
+  // Compute bearing from a to b (0-360, 0=N)
+  double _bearingDegrees(LatLng a, LatLng b) {
+    final lat1 = a.latitude * pi / 180.0;
+    final lat2 = b.latitude * pi / 180.0;
+    final dLon = (b.longitude - a.longitude) * pi / 180.0;
+    final y = sin(dLon) * cos(lat2);
+    final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+    double brng = atan2(y, x) * 180.0 / pi;
+    if (brng < 0) brng += 360.0;
+    return brng;
+  }
 
-      for (int i = 0; i < waypoints.length; i++) {
-        final wp = waypoints[i];
-        buffer.writeln('Waypoint ${i + 1}:');
-        buffer.writeln('  Latitude: ${wp.position.latitude}');
-        buffer.writeln('  Longitude: ${wp.position.longitude}');
-        buffer.writeln('  Altitude: ${wp.altitude}');
-        buffer.writeln('  Spray Rate: ${wp.sprayRate}');
-        buffer.writeln('  Spray Enabled: ${wp.sprayEnabled}');
-        buffer.writeln();
+  // Remove intermediate points on straight segments, keep only edge points and direction changes
+  List<LatLng> _simplifyPath(List<LatLng> path,
+      {double minBearingChangeDeg = 5.0}) {
+    if (path.length <= 2) return path;
+    final List<LatLng> simplified = [path.first];
+
+    for (int i = 1; i < path.length - 1; i++) {
+      final prev = path[i - 1];
+      final curr = path[i];
+      final next = path[i + 1];
+
+      // Calculate bearing change at this point
+      final bearingChange = _bearingDifference(prev, curr, next);
+
+      // Keep point if direction changes significantly or if it's the last point before a turn
+      if (bearingChange >= minBearingChangeDeg) {
+        simplified.add(curr);
       }
-
-      buffer.writeln('=' * 50);
-      buffer.writeln('Raw JSON:');
-      buffer.writeln(json.encode(waypoints.map((w) => w.toJson()).toList()));
-
-      file.writeAsStringSync(buffer.toString());
-      debugPrint('Waypoints logged to: $filename');
-    } catch (e) {
-      debugPrint('Failed to log waypoints: $e');
     }
+
+    // Always keep the last point
+    simplified.add(path.last);
+    return simplified;
   }
 
   Future<void> uploadMissionToAutopilot(Mission mission) async {
     try {
       // Derive waypoints per mission type on-the-fly
-      final effectiveWaypoints = await _buildEffectiveWaypoints(mission);
+      final effectiveWaypoints = _buildEffectiveWaypoints(mission);
       final missionJson = Mission(
         id: mission.id,
         name: mission.name,
         waypoints: effectiveWaypoints,
         defaultAltitude: mission.defaultAltitude,
         defaultSprayRate: mission.defaultSprayRate,
+        defaultSpeed: mission.defaultSpeed,
         createdAt: mission.createdAt,
         completedAt: mission.completedAt,
         status: mission.status,
@@ -344,6 +331,7 @@ class DroneService extends ChangeNotifier {
           'waypoints': missionJson['waypoints'],
           'defaultAltitude': mission.defaultAltitude,
           'defaultSprayRate': mission.defaultSprayRate,
+          'defaultSpeed': mission.defaultSpeed,
         };
         _wsChannel!.sink.add(json.encode(message));
       } else if (socket != null) {
@@ -353,71 +341,58 @@ class DroneService extends ChangeNotifier {
       }
       debugPrint(
           'Mission upload requested with ${effectiveWaypoints.length} waypoints');
+      _isMissionUploaded = true;
+      notifyListeners();
     } catch (e) {
       debugPrint('Failed to upload mission: $e');
+      _isMissionUploaded = false;
+      notifyListeners();
       rethrow;
     }
   }
 
-  Future<List<MissionWaypoint>> _buildEffectiveWaypoints(
-      Mission mission) async {
+  List<MissionWaypoint> _buildEffectiveWaypoints(Mission mission) {
     final missionType = _selectedMissionType;
     final userPoints = mission.waypoints.map((w) => w.position).toList();
-
+    // Ensure first point is treated as drone start; compute from user points excluding first when building hull/path
+    final hasStart = userPoints.isNotEmpty;
+    final startPoint = hasStart ? userPoints.first : null;
+    final restPoints = hasStart ? userPoints.sublist(1) : <LatLng>[];
     if (userPoints.length < 3) return mission.waypoints;
 
     if (missionType == 'dense_inspection') {
-      // For dense inspection, use all user points to compute convex hull
-      final hull = _computeConvexHull(userPoints);
-
-      // Get current drone position from telemetry or use first user point as fallback
-      LatLng? currentDronePosition;
-      try {
-        // Try to get current drone position from SharedPreferences (last known position)
-        final prefs = await SharedPreferences.getInstance();
-        final lat = prefs.getDouble('last_drone_latitude');
-        final lon = prefs.getDouble('last_drone_longitude');
-        if (lat != null && lon != null) {
-          currentDronePosition = LatLng(lat, lon);
-        }
-      } catch (e) {
-        debugPrint('Failed to get current drone position: $e');
-      }
-
-      // Use first user point as fallback if no current position available
-      final startPoint = currentDronePosition ?? userPoints.first;
-
-      // Generate dense path starting from current drone position
-      // Use 20.0m altitude to match MapView's _surveyAltitude for consistency
-      final path = _generateDensePath(hull, 20.0,
+      final hull =
+          _computeConvexHull(restPoints.isNotEmpty ? restPoints : userPoints);
+      // Use target altitude if set, otherwise use mission default
+      // Minimum altitude for path calculation is 10m
+      final altitude = max(10.0, _targetAltitude ?? mission.defaultAltitude);
+      final path = _generateDensePath(hull, altitude,
           startPoint: startPoint, returnToStart: true);
-
-      // Convert path points to mission waypoints
-      // Use 20.0m altitude to match the path generation altitude
-      final effective = path
+      final effective = <MissionWaypoint>[];
+      effective.addAll(path
           .map((p) => MissionWaypoint(
                 position: p,
-                altitude: 20.0, // Use same altitude as path generation
+                altitude:
+                    altitude, // Use calculated altitude for path generation
                 sprayRate: mission.defaultSprayRate,
                 sprayEnabled: true,
               ))
-          .toList();
-
-      debugPrint(
-          'Dense inspection: Generated ${effective.length} waypoints starting from drone position');
-
-      // Log generated waypoints for comparison
-      _logGeneratedWaypoints(effective, 'dense_inspection_generated');
-
+          .toList());
       return effective;
     }
 
     if (missionType == 'inspection') {
-      // For simple inspection, use all user points to compute convex hull
-      final hull = _computeConvexHull(userPoints);
+      final hull =
+          _computeConvexHull(restPoints.isNotEmpty ? restPoints : userPoints);
       final effective = <MissionWaypoint>[];
-
-      // Add convex hull points as waypoints
+      if (startPoint != null) {
+        effective.add(MissionWaypoint(
+          position: startPoint,
+          altitude: mission.defaultAltitude,
+          sprayRate: mission.defaultSprayRate,
+          sprayEnabled: true,
+        ));
+      }
       effective.addAll(hull
           .map((p) => MissionWaypoint(
                 position: p,
@@ -426,13 +401,6 @@ class DroneService extends ChangeNotifier {
                 sprayEnabled: true,
               ))
           .toList());
-
-      debugPrint(
-          'Simple inspection: Generated ${effective.length} waypoints from convex hull');
-
-      // Log generated waypoints for comparison
-      _logGeneratedWaypoints(effective, 'simple_inspection_generated');
-
       return effective;
     }
 
@@ -461,6 +429,7 @@ class DroneService extends ChangeNotifier {
 
   Future<void> connectToDrone(String ipAddress) async {
     if (_isConnecting) return;
+    _userInitiatedDisconnect = false;
     _lastIpAddress = ipAddress;
 
     // Cancel any existing reconnect timer
@@ -536,20 +505,13 @@ class DroneService extends ChangeNotifier {
       debugPrint('Error connecting to drone: $e');
 
       // Attempt to reconnect after a delay
-      _reconnectTimer?.cancel();
-      _reconnectTimer = Timer(const Duration(seconds: 5), () {
-        if (!_isConnected && !_isConnecting) {
-          debugPrint('Attempting to reconnect to drone...');
-          if (_lastIpAddress != null) {
-            connectToDrone(_lastIpAddress!);
-          }
-        }
-      });
+      _scheduleReconnect();
     }
   }
 
   Future<void> connectToTelemetryWs(String ipAddressOrUrl) async {
     if (_isConnecting) return;
+    _userInitiatedDisconnect = false;
     _lastIpAddress = ipAddressOrUrl;
 
     _isConnecting = true;
@@ -641,6 +603,7 @@ class DroneService extends ChangeNotifier {
         notifyListeners();
         debugPrint('WS telemetry connection closed');
         _stopConnectionValidation();
+        _scheduleReconnect();
       }, onError: (error) {
         _isConnected = false;
         _isConnecting = false;
@@ -648,6 +611,7 @@ class DroneService extends ChangeNotifier {
         notifyListeners();
         debugPrint('WS telemetry error: $error');
         _stopConnectionValidation();
+        _scheduleReconnect();
       });
 
       _baseUrl = 'ws://$host:$port';
@@ -666,6 +630,7 @@ class DroneService extends ChangeNotifier {
       _connectionError = e.toString();
       notifyListeners();
       debugPrint('Error connecting to WS telemetry: $e');
+      _scheduleReconnect();
     }
   }
 
@@ -733,22 +698,7 @@ class DroneService extends ChangeNotifier {
       notifyListeners();
       debugPrint('Socket disconnected from drone');
       _stopConnectionValidation();
-
-      // Attempt to reconnect after a delay
-      _reconnectTimer?.cancel();
-      _reconnectTimer = Timer(const Duration(seconds: 5), () {
-        if (!_isConnected && !_isConnecting) {
-          debugPrint('Attempting to reconnect to drone...');
-          if (_lastIpAddress != null) {
-            // Prefer reconnecting via the same transport used last
-            if (_baseUrl.startsWith('ws://')) {
-              connectToTelemetryWs(_lastIpAddress!);
-            } else {
-              connectToDrone(_lastIpAddress!);
-            }
-          }
-        }
-      });
+      _scheduleReconnect();
     });
 
     socket!.onConnectError((error) {
@@ -758,6 +708,7 @@ class DroneService extends ChangeNotifier {
       notifyListeners();
       debugPrint('Socket connection error: $error');
       _stopConnectionValidation();
+      _scheduleReconnect();
     });
 
     socket!.on('connection_status', (data) {
@@ -821,9 +772,29 @@ Timestamp: ${telemetry.timestamp}
     });
   }
 
+  void _scheduleReconnect() {
+    if (_userInitiatedDisconnect) {
+      debugPrint('Auto-reconnect disabled due to user-initiated disconnect');
+      return;
+    }
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 5), () {
+      if (_isConnected || _isConnecting) return;
+      if (_lastIpAddress == null) return;
+      debugPrint('Auto-reconnect attempting to reconnect...');
+      // If last connection was WS (baseUrl starts with ws://), try WS; else Socket.IO
+      if (_baseUrl.startsWith('ws://') || _baseUrl.startsWith('wss://')) {
+        connectToTelemetryWs(_lastIpAddress!);
+      } else {
+        connectToDrone(_lastIpAddress!);
+      }
+    });
+  }
+
   Future<void> disconnectFromDrone() async {
     // Cancel any reconnect timer
     _reconnectTimer?.cancel();
+    _userInitiatedDisconnect = true;
     _stopConnectionValidation();
 
     if (socket != null) {
@@ -860,13 +831,14 @@ Timestamp: ${telemetry.timestamp}
           'Starting mission with waypoints: ${missionToStart.waypoints.length}');
 
       // Convert effective mission to JSON and print for debugging
-      final effectiveWaypoints = await _buildEffectiveWaypoints(missionToStart);
+      final effectiveWaypoints = _buildEffectiveWaypoints(missionToStart);
       final effectiveMission = Mission(
         id: missionToStart.id,
         name: missionToStart.name,
         waypoints: effectiveWaypoints,
         defaultAltitude: missionToStart.defaultAltitude,
         defaultSprayRate: missionToStart.defaultSprayRate,
+        defaultSpeed: missionToStart.defaultSpeed,
         createdAt: missionToStart.createdAt,
         completedAt: missionToStart.completedAt,
         status: missionToStart.status,
@@ -875,7 +847,7 @@ Timestamp: ${telemetry.timestamp}
       debugPrint('Mission JSON: ${json.encode(missionJson)}');
 
       // Print first waypoint for debugging
-      if (effectiveWaypoints.isNotEmpty) {
+      if (missionToStart.waypoints.isNotEmpty) {
         final firstWaypoint = effectiveWaypoints.first;
         debugPrint('First waypoint: ${json.encode(firstWaypoint.toJson())}');
       }
@@ -900,6 +872,8 @@ Timestamp: ${telemetry.timestamp}
         final message = {
           'type': 'start_mission',
           'waypoints': missionJson['waypoints'],
+          'defaultAltitude': missionToStart.defaultAltitude,
+          'defaultSpeed': missionToStart.defaultSpeed,
         };
         _wsChannel!.sink.add(json.encode(message));
 

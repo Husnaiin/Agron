@@ -344,8 +344,10 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
             await websocket.send_json({"type": "mission_status", "status": "error", "message": "no waypoints provided"})
             return
 
-        # Build mission items: TAKEOFF (20m) -> WAYPOINTS (20m) -> RTL
-        print(f"[MISSION] upload_mission received with {len(raw_wps)} waypoints")
+        # Build mission items with provided altitude/speed (defaults if missing)
+        target_alt = float(message.get("defaultAltitude") or 20.0)
+        target_speed = float(message.get("defaultSpeed") or 5.0)
+        print(f"[MISSION] upload_mission received with {len(raw_wps)} waypoints alt={target_alt}m speed={target_speed}m/s")
         try:
             frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
             cmds_int = []  # MISSION_ITEM_INT messages
@@ -401,7 +403,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 3.0, 0, 0, 0,
                 int(first_lat * 1e7),
                 int(first_lon * 1e7),
-                20.0,
+                float(target_alt),
             )
             wp0_flt = mavutil.mavlink.MAVLink_mission_item_message(
                 m.target_system,
@@ -414,7 +416,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 3.0, 0, 0, 0,
                 float(first_lat),
                 float(first_lon),
-                20.0,
+                float(target_alt),
             )
             cmds_int.append(wp0_int)
             cmds_flt.append(wp0_flt)
@@ -434,7 +436,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 # int(first_lon * 1e7),
                 0,
                 0,
-                20.0,
+                float(target_alt),
             )
             takeoff_flt = mavutil.mavlink.MAVLink_mission_item_message(
                 m.target_system,
@@ -449,7 +451,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 # float(first_lon),
                 0,
                 0,
-                20.0,
+                float(target_alt),
             )
             cmds_int.append(takeoff_int)
             cmds_flt.append(takeoff_flt)
@@ -469,7 +471,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 0, 0, 0, 0,
                 int(first_lat * 1e7),
                 int(first_lon * 1e7),
-                20.0,
+                float(target_alt),
             )
             wp_first_flt = mavutil.mavlink.MAVLink_mission_item_message(
                 m.target_system,
@@ -482,7 +484,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 0, 0, 0, 0,
                 float(first_lat),
                 float(first_lon),
-                20.0,
+                float(target_alt),
             )
             cmds_int.append(wp_first_int)
             cmds_flt.append(wp_first_flt)
@@ -491,6 +493,28 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
             prepared_wp += 1
 
             # Remaining waypoints (skip the first, already added twice)
+            # Insert a DO_CHANGE_SPEED before remaining waypoints
+            try:
+                m.mav.command_long_send(
+                    m.target_system,
+                    m.target_component or mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1,
+                    mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED,
+                    0,
+                    1,  # groundspeed
+                    float(target_speed),
+                    -1, 0, 0, 0, 0,
+                )
+                # Also attempt param set as a backup
+                m.mav.param_set_send(
+                    m.target_system,
+                    m.target_component or mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1,
+                    b"WPNAV_SPEED",
+                    float(max(0.0, target_speed) * 100.0),
+                    mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+                )
+            except Exception:
+                pass
+
             for wp in raw_wps[1:]:
                 lat, lon = _extract_lat_lon(wp)
                 if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
@@ -506,7 +530,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                     0, 0, 0, 0,
                     int(lat * 1e7),
                     int(lon * 1e7),
-                    20.0,
+                    float(target_alt),
                 )
                 wp_flt = mavutil.mavlink.MAVLink_mission_item_message(
                     m.target_system,
@@ -519,7 +543,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                     0, 0, 0, 0,
                     float(lat),
                     float(lon),
-                    20.0,
+                    float(target_alt),
                 )
                 cmds_int.append(wp_int)
                 cmds_flt.append(wp_flt)

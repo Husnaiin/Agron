@@ -50,6 +50,7 @@ class Mission {
   final List<MissionWaypoint> waypoints;
   final double defaultAltitude;
   final double defaultSprayRate;
+  final double defaultSpeed; // m/s
   final DateTime createdAt;
   final DateTime? completedAt;
   MissionStatus status;
@@ -60,6 +61,7 @@ class Mission {
     required this.waypoints,
     required this.defaultAltitude,
     required this.defaultSprayRate,
+    required this.defaultSpeed,
     required this.createdAt,
     this.completedAt,
     this.status = MissionStatus.pending,
@@ -71,6 +73,7 @@ class Mission {
         'waypoints': waypoints.map((w) => w.toJson()).toList(),
         'defaultAltitude': defaultAltitude,
         'defaultSprayRate': defaultSprayRate,
+        'defaultSpeed': defaultSpeed,
         'createdAt': createdAt.toIso8601String(),
         'completedAt': completedAt?.toIso8601String(),
         'status': status.toString().split('.').last,
@@ -84,6 +87,7 @@ class Mission {
             .toList(),
         defaultAltitude: json['defaultAltitude'] as double,
         defaultSprayRate: json['defaultSprayRate'] as double,
+        defaultSpeed: (json['defaultSpeed'] as double?) ?? 5.0,
         createdAt: DateTime.parse(json['createdAt'] as String),
         completedAt: json['completedAt'] != null
             ? DateTime.parse(json['completedAt'] as String)

@@ -110,7 +110,7 @@ class _MissionScreenState extends State<MissionScreen> {
 
   void _startMission(Mission mission) {
     final droneService = context.read<DroneService>();
-    droneService.setMission(mission);
+    droneService.setMission(mission, fromHistory: true);
     Navigator.pushReplacementNamed(context, '/home');
   }
 

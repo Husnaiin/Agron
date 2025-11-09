@@ -8,10 +8,20 @@ class MissionStorage {
   Future<void> saveMission(Mission mission) async {
     final prefs = await SharedPreferences.getInstance();
     final missions = await getMissions();
-    missions.add(mission);
-    await prefs.setString(_missionsKey, jsonEncode(
-      missions.map((m) => m.toJson()).toList(),
-    ));
+    // Check if mission with same ID already exists
+    final existingIndex = missions.indexWhere((m) => m.id == mission.id);
+    if (existingIndex != -1) {
+      // Replace existing mission
+      missions[existingIndex] = mission;
+    } else {
+      // Add new mission
+      missions.add(mission);
+    }
+    await prefs.setString(
+        _missionsKey,
+        jsonEncode(
+          missions.map((m) => m.toJson()).toList(),
+        ));
   }
 
   Future<List<Mission>> getMissions() async {
@@ -27,9 +37,11 @@ class MissionStorage {
     final prefs = await SharedPreferences.getInstance();
     final missions = await getMissions();
     missions.removeWhere((m) => m.id == id);
-    await prefs.setString(_missionsKey, jsonEncode(
-      missions.map((m) => m.toJson()).toList(),
-    ));
+    await prefs.setString(
+        _missionsKey,
+        jsonEncode(
+          missions.map((m) => m.toJson()).toList(),
+        ));
   }
 
   Future<void> updateMissionStatus(String id, bool completed) async {
@@ -43,14 +55,17 @@ class MissionStorage {
         waypoints: missions[index].waypoints,
         defaultAltitude: missions[index].defaultAltitude,
         defaultSprayRate: missions[index].defaultSprayRate,
+        defaultSpeed: missions[index].defaultSpeed,
         createdAt: missions[index].createdAt,
         completedAt: completed ? DateTime.now() : null,
         status: completed ? MissionStatus.completed : MissionStatus.inProgress,
       );
       missions[index] = updatedMission;
-      await prefs.setString(_missionsKey, jsonEncode(
-        missions.map((m) => m.toJson()).toList(),
-      ));
+      await prefs.setString(
+          _missionsKey,
+          jsonEncode(
+            missions.map((m) => m.toJson()).toList(),
+          ));
     }
   }
-} 
+}
