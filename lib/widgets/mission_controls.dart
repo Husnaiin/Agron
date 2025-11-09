@@ -17,7 +17,8 @@ class _MissionControlsState extends State<MissionControls> {
 
   @override
   Widget build(BuildContext context) {
-    final droneService = context.read<DroneService>();
+    final droneService = Provider.of<DroneService>(context);
+    final isMissionUploaded = droneService.isMissionUploaded;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -70,12 +71,12 @@ class _MissionControlsState extends State<MissionControls> {
                         },
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               Flexible(
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   child: ElevatedButton(
-                    onPressed: _isMissionActive
+                    onPressed: (_isMissionActive || !isMissionUploaded)
                         ? null
                         : () => _startMission(droneService),
                     style: ElevatedButton.styleFrom(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/drone_service.dart';
 import '../models/telemetry.dart';
 
@@ -16,7 +17,23 @@ class TelemetryPanel extends StatelessWidget {
       stream: droneService.telemetryStream,
       builder: (context, snapshot) {
         final telemetry = snapshot.data;
-        
+        final droneServiceState = Provider.of<DroneService>(context);
+        final targetSpeed = droneServiceState.targetSpeed;
+        final targetAltitude = droneServiceState.targetAltitude;
+        final isMissionActive = droneServiceState.isMissionActive;
+
+        // During mission: show actual telemetry values; otherwise show target/default
+        final displaySpeed = isMissionActive && telemetry != null
+            ? '${telemetry.speed.toStringAsFixed(1)} m/s'
+            : (targetSpeed != null
+                ? '${targetSpeed.toStringAsFixed(1)} m/s'
+                : '5.0 m/s');
+        final displayAltitude = isMissionActive && telemetry != null
+            ? '${telemetry.altitude.toStringAsFixed(1)} m'
+            : (targetAltitude != null
+                ? '${targetAltitude.toStringAsFixed(1)} m'
+                : '20.0 m');
+
         return Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -32,17 +49,40 @@ class TelemetryPanel extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildTelemetryItem(
+              _buildEditableTelemetryItem(
                 context,
                 Icons.speed,
                 'Speed',
-                telemetry != null ? '${telemetry.speed.toStringAsFixed(1)} m/s' : '--',
+                displaySpeed,
+                isMissionActive
+                    ? null
+                    : (targetSpeed != null
+                        ? '${targetSpeed.toStringAsFixed(1)} m/s'
+                        : null),
+                isMissionActive
+                    ? null
+                    : () => _showEditDialog(
+                            context, 'Speed', targetSpeed ?? 5.0, (value) {
+                          droneService.setTargetSpeed(value);
+                        }),
               ),
-              _buildTelemetryItem(
+              _buildEditableTelemetryItem(
                 context,
                 Icons.height,
                 'Altitude',
-                telemetry != null ? '${telemetry.altitude.toStringAsFixed(1)} m' : '--',
+                displayAltitude,
+                isMissionActive
+                    ? null
+                    : (targetAltitude != null
+                        ? '${targetAltitude.toStringAsFixed(1)} m'
+                        : null),
+                isMissionActive
+                    ? null
+                    : () => _showEditDialog(
+                            context, 'Altitude', targetAltitude ?? 20.0,
+                            (value) {
+                          droneService.setTargetAltitude(value);
+                        }),
               ),
               _buildTelemetryItem(
                 context,
@@ -69,6 +109,50 @@ class TelemetryPanel extends StatelessWidget {
     );
   }
 
+  Widget _buildEditableTelemetryItem(
+    BuildContext context,
+    IconData icon,
+    String label,
+    String displayValue,
+    String? targetValue,
+    VoidCallback? onTap,
+  ) {
+    final widget = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 24, color: targetValue != null ? Colors.blue : null),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        Text(
+          displayValue,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: targetValue != null ? Colors.blue : null,
+              ),
+        ),
+        if (targetValue != null)
+          Text(
+            'Target',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontSize: 10,
+                  color: Colors.blue,
+                ),
+          ),
+      ],
+    );
+
+    if (onTap != null) {
+      return GestureDetector(
+        onTap: onTap,
+        child: widget,
+      );
+    }
+    return widget;
+  }
+
   Widget _buildTelemetryItem(
     BuildContext context,
     IconData icon,
@@ -93,4 +177,40 @@ class TelemetryPanel extends StatelessWidget {
       ],
     );
   }
-} 
+
+  void _showEditDialog(BuildContext context, String label, double currentValue,
+      Function(double) onSave) {
+    final controller =
+        TextEditingController(text: currentValue.toStringAsFixed(1));
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Set $label'),
+        content: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(
+            labelText: label,
+            suffixText: label == 'Speed' ? 'm/s' : 'm',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final value = double.tryParse(controller.text);
+              if (value != null && value > 0) {
+                onSave(value);
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+}

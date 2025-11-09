@@ -93,7 +93,6 @@ class _MapViewState extends State<MapView> {
 
   // Dense inspection preview
   final List<LatLng> _densePathPoints = [];
-  double _surveyAltitude = 20.0; // meters, can be made user-adjustable later
   bool _showDirectionArrows = true; // UI toggle for dense preview arrows
   double _arrowPixelSize = 38.0; // Adjust arrow size (px) for Dense preview
 
@@ -475,6 +474,7 @@ class _MapViewState extends State<MapView> {
           .toList(),
       defaultAltitude: defaultAltitude,
       defaultSprayRate: defaultSprayRate,
+      defaultSpeed: 5.0, // default speed in m/s
       createdAt: DateTime.now(),
     );
 
@@ -573,10 +573,16 @@ class _MapViewState extends State<MapView> {
                   drawingHullPoints.length >= 3) ...[
                 // Compute and render dense inspection preview
                 Builder(builder: (context) {
+                  final targetAlt =
+                      Provider.of<DroneService>(context, listen: true)
+                              .targetAltitude ??
+                          20.0; // default 20m if not set
+                  // Minimum altitude for path calculation is 10m
+                  final pathAlt = max(10.0, targetAlt);
                   _densePathPoints
                     ..clear()
                     ..addAll(_generateDenseInspectionPath(
-                        drawingHullPoints, _surveyAltitude,
+                        drawingHullPoints, pathAlt,
                         startPoint: _droneLocation, returnToStart: true));
                   return PolylineLayer(
                     polylines: [
@@ -644,10 +650,15 @@ class _MapViewState extends State<MapView> {
               if (service.selectedMissionType == 'dense_inspection') ...[
                 // Show dense path preview derived from stored user points
                 Builder(builder: (context) {
+                  final targetAlt =
+                      Provider.of<DroneService>(context, listen: true)
+                              .targetAltitude ??
+                          20.0; // default 20m if not set
+                  // Minimum altitude for path calculation is 10m
+                  final pathAlt = max(10.0, targetAlt);
                   _densePathPoints
                     ..clear()
-                    ..addAll(_generateDenseInspectionPath(
-                        hullPoints, _surveyAltitude,
+                    ..addAll(_generateDenseInspectionPath(hullPoints, pathAlt,
                         startPoint: _droneLocation, returnToStart: true));
                   return PolylineLayer(
                     polylines: [
@@ -737,8 +748,10 @@ class _MapViewState extends State<MapView> {
                   ),
                   IconButton(
                     icon: const Icon(Icons.save),
-                    onPressed:
-                        _points.length >= 3 ? () => _saveMission() : null,
+                    onPressed: (_points.length >= 3 ||
+                            _droneService.currentMission != null)
+                        ? () => _saveMission()
+                        : null,
                     tooltip: 'Save Mission',
                     color: _droneService.currentMission != null
                         ? Colors.green
@@ -1027,11 +1040,62 @@ class _MapViewState extends State<MapView> {
   }
 
   Future<void> _saveMission() async {
-    final mission = await _createMission();
-    if (mission != null) {
-      _droneService.setMission(mission);
+    // If mission is from history, update existing mission; otherwise create new
+    final existingMission = _droneService.currentMission;
+    Mission? missionToSave;
+
+    if (existingMission != null && _droneService.isMissionFromHistory) {
+      // Update existing mission with current target altitude/speed
+      final altitude =
+          _droneService.targetAltitude ?? existingMission.defaultAltitude;
+      final speed = _droneService.targetSpeed ?? existingMission.defaultSpeed;
+      missionToSave = Mission(
+        id: existingMission.id,
+        name: existingMission.name,
+        waypoints: existingMission.waypoints,
+        defaultAltitude: altitude,
+        defaultSprayRate: existingMission.defaultSprayRate,
+        defaultSpeed: speed,
+        createdAt: existingMission.createdAt,
+        completedAt: existingMission.completedAt,
+        status: existingMission.status,
+      );
+    } else if (_points.length >= 3) {
+      // Create new mission from drawn points
+      missionToSave = await _createMission();
+      if (missionToSave != null) {
+        // Use target altitude/speed if set, otherwise use mission defaults
+        final altitude =
+            _droneService.targetAltitude ?? missionToSave.defaultAltitude;
+        final speed = _droneService.targetSpeed ?? missionToSave.defaultSpeed;
+        missionToSave = Mission(
+          id: missionToSave.id,
+          name: missionToSave.name,
+          waypoints: missionToSave.waypoints,
+          defaultAltitude: altitude,
+          defaultSprayRate: missionToSave.defaultSprayRate,
+          defaultSpeed: speed,
+          createdAt: missionToSave.createdAt,
+          completedAt: missionToSave.completedAt,
+          status: missionToSave.status,
+        );
+      }
+    }
+
+    if (missionToSave != null) {
+      // Save to storage (will replace if ID exists)
       try {
-        await _droneService.uploadMissionToAutopilot(mission);
+        await _missionStorage.saveMission(missionToSave);
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save mission: $e')),
+        );
+        return;
+      }
+
+      _droneService.setMission(missionToSave, fromHistory: false);
+      try {
+        await _droneService.uploadMissionToAutopilot(missionToSave);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Mission uploaded to drone')),
         );
@@ -1043,6 +1107,11 @@ class _MapViewState extends State<MapView> {
       setState(() => _isDrawing = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Mission saved successfully')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Please mark at least 3 points or load a mission')),
       );
     }
   }

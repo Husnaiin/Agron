@@ -28,6 +28,11 @@ class DroneService extends ChangeNotifier {
   Timer? _reconnectTimer;
   Timer? _connectionValidationTimer;
   String? _lastIpAddress;
+  bool _userInitiatedDisconnect = false;
+  bool _isMissionUploaded = false;
+  bool _isMissionFromHistory = false;
+  double? _targetAltitude;
+  double? _targetSpeed;
 
   Stream<Telemetry> get telemetryStream => _telemetryController.stream;
   bool get isConnected => _isConnected;
@@ -37,6 +42,20 @@ class DroneService extends ChangeNotifier {
   Mission? get currentMission => _currentMission;
   bool get isMissionActive => _isMissionActive;
   String get selectedMissionType => _selectedMissionType;
+  bool get isMissionUploaded => _isMissionUploaded;
+  bool get isMissionFromHistory => _isMissionFromHistory;
+  double? get targetAltitude => _targetAltitude;
+  double? get targetSpeed => _targetSpeed;
+
+  void setTargetAltitude(double? altitude) {
+    _targetAltitude = altitude;
+    notifyListeners();
+  }
+
+  void setTargetSpeed(double? speed) {
+    _targetSpeed = speed;
+    notifyListeners();
+  }
 
   void setSelectedMissionType(String type) {
     if (_selectedMissionType == type) return;
@@ -50,8 +69,13 @@ class DroneService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setMission(Mission mission) {
+  void setMission(Mission mission, {bool fromHistory = false}) {
     _currentMission = mission;
+    _isMissionFromHistory = fromHistory;
+    // Reset upload status when new mission is set (unless it's from history and already uploaded)
+    if (!fromHistory) {
+      _isMissionUploaded = false;
+    }
     notifyListeners();
   }
 
@@ -161,7 +185,7 @@ class DroneService extends ChangeNotifier {
 
     double dLonFor(double lat) =>
         _metersToDegreesLon(spacing.alongTrackSpacingM, lat);
-    final List<LatLng> result = [];
+    List<LatLng> result = [];
     bool reverse = false;
     for (double y = minLat; y <= maxLat + 1e-9; y += dLat) {
       final xs = intersectionsAtLat(y);
@@ -184,10 +208,22 @@ class DroneService extends ChangeNotifier {
           row.add(LatLng(y, x1));
         }
         if (reverse) row = row.reversed.toList();
-        result.addAll(row);
+        // Only add first and last point of each row (edge points of straight segment)
+        if (row.isNotEmpty) {
+          if (row.length == 1) {
+            result.add(row.first);
+          } else {
+            result.add(row.first);
+            result.add(row.last);
+          }
+        }
         reverse = !reverse;
       }
     }
+
+    // Further simplify: remove intermediate points where direction change is minimal
+    result = _simplifyPath(result, minBearingChangeDeg: 5.0);
+
     // If a start point is provided, reorder path to start from nearest point
     if (startPoint != null && result.isNotEmpty) {
       int nearestIdx = 0;
@@ -228,6 +264,52 @@ class DroneService extends ChangeNotifier {
     return R * c;
   }
 
+  // Compute bearing difference in degrees (0-180)
+  double _bearingDifference(LatLng a, LatLng b, LatLng c) {
+    final bearing1 = _bearingDegrees(a, b);
+    final bearing2 = _bearingDegrees(b, c);
+    double diff = (bearing2 - bearing1).abs();
+    if (diff > 180) diff = 360 - diff;
+    return diff;
+  }
+
+  // Compute bearing from a to b (0-360, 0=N)
+  double _bearingDegrees(LatLng a, LatLng b) {
+    final lat1 = a.latitude * pi / 180.0;
+    final lat2 = b.latitude * pi / 180.0;
+    final dLon = (b.longitude - a.longitude) * pi / 180.0;
+    final y = sin(dLon) * cos(lat2);
+    final x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+    double brng = atan2(y, x) * 180.0 / pi;
+    if (brng < 0) brng += 360.0;
+    return brng;
+  }
+
+  // Remove intermediate points on straight segments, keep only edge points and direction changes
+  List<LatLng> _simplifyPath(List<LatLng> path,
+      {double minBearingChangeDeg = 5.0}) {
+    if (path.length <= 2) return path;
+    final List<LatLng> simplified = [path.first];
+
+    for (int i = 1; i < path.length - 1; i++) {
+      final prev = path[i - 1];
+      final curr = path[i];
+      final next = path[i + 1];
+
+      // Calculate bearing change at this point
+      final bearingChange = _bearingDifference(prev, curr, next);
+
+      // Keep point if direction changes significantly or if it's the last point before a turn
+      if (bearingChange >= minBearingChangeDeg) {
+        simplified.add(curr);
+      }
+    }
+
+    // Always keep the last point
+    simplified.add(path.last);
+    return simplified;
+  }
+
   Future<void> uploadMissionToAutopilot(Mission mission) async {
     try {
       // Derive waypoints per mission type on-the-fly
@@ -238,6 +320,7 @@ class DroneService extends ChangeNotifier {
         waypoints: effectiveWaypoints,
         defaultAltitude: mission.defaultAltitude,
         defaultSprayRate: mission.defaultSprayRate,
+        defaultSpeed: mission.defaultSpeed,
         createdAt: mission.createdAt,
         completedAt: mission.completedAt,
         status: mission.status,
@@ -248,6 +331,7 @@ class DroneService extends ChangeNotifier {
           'waypoints': missionJson['waypoints'],
           'defaultAltitude': mission.defaultAltitude,
           'defaultSprayRate': mission.defaultSprayRate,
+          'defaultSpeed': mission.defaultSpeed,
         };
         _wsChannel!.sink.add(json.encode(message));
       } else if (socket != null) {
@@ -257,8 +341,12 @@ class DroneService extends ChangeNotifier {
       }
       debugPrint(
           'Mission upload requested with ${effectiveWaypoints.length} waypoints');
+      _isMissionUploaded = true;
+      notifyListeners();
     } catch (e) {
       debugPrint('Failed to upload mission: $e');
+      _isMissionUploaded = false;
+      notifyListeners();
       rethrow;
     }
   }
@@ -275,13 +363,17 @@ class DroneService extends ChangeNotifier {
     if (missionType == 'dense_inspection') {
       final hull =
           _computeConvexHull(restPoints.isNotEmpty ? restPoints : userPoints);
-      final path = _generateDensePath(hull, mission.defaultAltitude,
+      // Use target altitude if set, otherwise use mission default
+      // Minimum altitude for path calculation is 10m
+      final altitude = max(10.0, _targetAltitude ?? mission.defaultAltitude);
+      final path = _generateDensePath(hull, altitude,
           startPoint: startPoint, returnToStart: true);
       final effective = <MissionWaypoint>[];
       effective.addAll(path
           .map((p) => MissionWaypoint(
                 position: p,
-                altitude: mission.defaultAltitude,
+                altitude:
+                    altitude, // Use calculated altitude for path generation
                 sprayRate: mission.defaultSprayRate,
                 sprayEnabled: true,
               ))
@@ -337,6 +429,7 @@ class DroneService extends ChangeNotifier {
 
   Future<void> connectToDrone(String ipAddress) async {
     if (_isConnecting) return;
+    _userInitiatedDisconnect = false;
     _lastIpAddress = ipAddress;
 
     // Cancel any existing reconnect timer
@@ -412,20 +505,13 @@ class DroneService extends ChangeNotifier {
       debugPrint('Error connecting to drone: $e');
 
       // Attempt to reconnect after a delay
-      _reconnectTimer?.cancel();
-      _reconnectTimer = Timer(const Duration(seconds: 5), () {
-        if (!_isConnected && !_isConnecting) {
-          debugPrint('Attempting to reconnect to drone...');
-          if (_lastIpAddress != null) {
-            connectToDrone(_lastIpAddress!);
-          }
-        }
-      });
+      _scheduleReconnect();
     }
   }
 
   Future<void> connectToTelemetryWs(String ipAddressOrUrl) async {
     if (_isConnecting) return;
+    _userInitiatedDisconnect = false;
     _lastIpAddress = ipAddressOrUrl;
 
     _isConnecting = true;
@@ -517,6 +603,7 @@ class DroneService extends ChangeNotifier {
         notifyListeners();
         debugPrint('WS telemetry connection closed');
         _stopConnectionValidation();
+        _scheduleReconnect();
       }, onError: (error) {
         _isConnected = false;
         _isConnecting = false;
@@ -524,6 +611,7 @@ class DroneService extends ChangeNotifier {
         notifyListeners();
         debugPrint('WS telemetry error: $error');
         _stopConnectionValidation();
+        _scheduleReconnect();
       });
 
       _baseUrl = 'ws://$host:$port';
@@ -542,6 +630,7 @@ class DroneService extends ChangeNotifier {
       _connectionError = e.toString();
       notifyListeners();
       debugPrint('Error connecting to WS telemetry: $e');
+      _scheduleReconnect();
     }
   }
 
@@ -609,22 +698,7 @@ class DroneService extends ChangeNotifier {
       notifyListeners();
       debugPrint('Socket disconnected from drone');
       _stopConnectionValidation();
-
-      // Attempt to reconnect after a delay
-      _reconnectTimer?.cancel();
-      _reconnectTimer = Timer(const Duration(seconds: 5), () {
-        if (!_isConnected && !_isConnecting) {
-          debugPrint('Attempting to reconnect to drone...');
-          if (_lastIpAddress != null) {
-            // Prefer reconnecting via the same transport used last
-            if (_baseUrl.startsWith('ws://')) {
-              connectToTelemetryWs(_lastIpAddress!);
-            } else {
-              connectToDrone(_lastIpAddress!);
-            }
-          }
-        }
-      });
+      _scheduleReconnect();
     });
 
     socket!.onConnectError((error) {
@@ -634,6 +708,7 @@ class DroneService extends ChangeNotifier {
       notifyListeners();
       debugPrint('Socket connection error: $error');
       _stopConnectionValidation();
+      _scheduleReconnect();
     });
 
     socket!.on('connection_status', (data) {
@@ -697,9 +772,29 @@ Timestamp: ${telemetry.timestamp}
     });
   }
 
+  void _scheduleReconnect() {
+    if (_userInitiatedDisconnect) {
+      debugPrint('Auto-reconnect disabled due to user-initiated disconnect');
+      return;
+    }
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 5), () {
+      if (_isConnected || _isConnecting) return;
+      if (_lastIpAddress == null) return;
+      debugPrint('Auto-reconnect attempting to reconnect...');
+      // If last connection was WS (baseUrl starts with ws://), try WS; else Socket.IO
+      if (_baseUrl.startsWith('ws://') || _baseUrl.startsWith('wss://')) {
+        connectToTelemetryWs(_lastIpAddress!);
+      } else {
+        connectToDrone(_lastIpAddress!);
+      }
+    });
+  }
+
   Future<void> disconnectFromDrone() async {
     // Cancel any reconnect timer
     _reconnectTimer?.cancel();
+    _userInitiatedDisconnect = true;
     _stopConnectionValidation();
 
     if (socket != null) {
@@ -743,6 +838,7 @@ Timestamp: ${telemetry.timestamp}
         waypoints: effectiveWaypoints,
         defaultAltitude: missionToStart.defaultAltitude,
         defaultSprayRate: missionToStart.defaultSprayRate,
+        defaultSpeed: missionToStart.defaultSpeed,
         createdAt: missionToStart.createdAt,
         completedAt: missionToStart.completedAt,
         status: missionToStart.status,
@@ -776,6 +872,8 @@ Timestamp: ${telemetry.timestamp}
         final message = {
           'type': 'start_mission',
           'waypoints': missionJson['waypoints'],
+          'defaultAltitude': missionToStart.defaultAltitude,
+          'defaultSpeed': missionToStart.defaultSpeed,
         };
         _wsChannel!.sink.add(json.encode(message));
 
