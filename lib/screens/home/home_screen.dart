@@ -88,6 +88,18 @@ class HomeScreen extends StatelessWidget {
                 ),
                 IconButton(
                   icon: Icon(
+                    Icons.account_circle,
+                    color: Theme.of(context).brightness == Brightness.light
+                        ? Colors.black
+                        : Colors.white,
+                  ),
+                  onPressed: () {
+                    Navigator.pushNamed(context, '/profile');
+                  },
+                  tooltip: 'Profile',
+                ),
+                IconButton(
+                  icon: Icon(
                     Icons.logout,
                     color: Theme.of(context).brightness == Brightness.light
                         ? Colors.black

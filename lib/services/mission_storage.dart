@@ -1,71 +1,75 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/mission.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class MissionStorage {
-  static const String _missionsKey = 'saved_missions';
+  static const String _missionsCollection = 'missions';
+  static const String _usersCollection = 'users';
+
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  String? get _uid => _auth.currentUser?.uid;
 
   Future<void> saveMission(Mission mission) async {
-    final prefs = await SharedPreferences.getInstance();
-    final missions = await getMissions();
-    // Check if mission with same ID already exists
-    final existingIndex = missions.indexWhere((m) => m.id == mission.id);
-    if (existingIndex != -1) {
-      // Replace existing mission
-      missions[existingIndex] = mission;
-    } else {
-      // Add new mission
-      missions.add(mission);
-    }
-    await prefs.setString(
-        _missionsKey,
-        jsonEncode(
-          missions.map((m) => m.toJson()).toList(),
-        ));
+    if (_uid == null) throw Exception('User not logged in');
+    await _firestore
+        .collection(_usersCollection)
+        .doc(_uid)
+        .collection(_missionsCollection)
+        .doc(mission.id)
+        .set(mission.toJson());
   }
 
   Future<List<Mission>> getMissions() async {
-    final prefs = await SharedPreferences.getInstance();
-    final missionsJson = prefs.getString(_missionsKey);
-    if (missionsJson == null) return [];
-
-    final List<dynamic> decoded = jsonDecode(missionsJson);
-    return decoded.map((json) => Mission.fromJson(json)).toList();
+    if (_uid == null) throw Exception('User not logged in');
+    final snapshot = await _firestore
+        .collection(_usersCollection)
+        .doc(_uid)
+        .collection(_missionsCollection)
+        .get();
+    return snapshot.docs
+        .map((doc) => Mission.fromJson(doc.data()))
+        .toList();
   }
 
   Future<void> deleteMission(String id) async {
-    final prefs = await SharedPreferences.getInstance();
-    final missions = await getMissions();
-    missions.removeWhere((m) => m.id == id);
-    await prefs.setString(
-        _missionsKey,
-        jsonEncode(
-          missions.map((m) => m.toJson()).toList(),
-        ));
+    if (_uid == null) throw Exception('User not logged in');
+    await _firestore
+        .collection(_usersCollection)
+        .doc(_uid)
+        .collection(_missionsCollection)
+        .doc(id)
+        .delete();
   }
 
   Future<void> updateMissionStatus(String id, bool completed) async {
-    final prefs = await SharedPreferences.getInstance();
-    final missions = await getMissions();
-    final index = missions.indexWhere((m) => m.id == id);
-    if (index != -1) {
-      final updatedMission = Mission(
-        id: missions[index].id,
-        name: missions[index].name,
-        waypoints: missions[index].waypoints,
-        defaultAltitude: missions[index].defaultAltitude,
-        defaultSprayRate: missions[index].defaultSprayRate,
-        defaultSpeed: missions[index].defaultSpeed,
-        createdAt: missions[index].createdAt,
-        completedAt: completed ? DateTime.now() : null,
-        status: completed ? MissionStatus.completed : MissionStatus.inProgress,
-      );
-      missions[index] = updatedMission;
-      await prefs.setString(
-          _missionsKey,
-          jsonEncode(
-            missions.map((m) => m.toJson()).toList(),
-          ));
-    }
+    if (_uid == null) throw Exception('User not logged in');
+    final docRef = _firestore
+        .collection(_usersCollection)
+        .doc(_uid)
+        .collection(_missionsCollection)
+        .doc(id);
+    await docRef.update({
+      'completedAt': completed ? DateTime.now().toIso8601String() : null,
+      'status': completed ? 'completed' : 'inProgress',
+    });
+  }
+
+  // User profile support
+  Future<void> createUserProfile(String email) async {
+    if (_uid == null) throw Exception('User not logged in');
+    await _firestore.collection(_usersCollection).doc(_uid).set({
+      'email': email,
+      'createdAt': DateTime.now().toIso8601String(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<Map<String, dynamic>?> getUserProfile() async {
+    if (_uid == null) throw Exception('User not logged in');
+    final doc = await _firestore.collection(_usersCollection).doc(_uid).get();
+    return doc.exists ? doc.data() : null;
   }
 }
