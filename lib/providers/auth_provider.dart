@@ -1,75 +1,89 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthProvider with ChangeNotifier {
-  String? _token;
-  String? _userId;
-  bool _isAuthenticated = false;
-  bool _initialized = false;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  bool get isAuthenticated => _isAuthenticated;
-  String? get token => _token;
-  String? get userId => _userId;
-  bool get isInitialized => _initialized;
+  User? _user;
+
+  User? get user => _user;
+  bool get isAuthenticated => _user != null;
 
   Future<void> login(String email, String password) async {
     try {
-      // TODO: Implement actual API call to backend
-      // For now, using mock authentication
-      _token = 'mock_token';
-      _userId = email; // Use email as userId for mock auth
-      _isAuthenticated = true;
-      
-      // Store auth data locally
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('token', _token!);
-      await prefs.setString('userId', _userId!);
-      
+      final credential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      _user = credential.user;
       notifyListeners();
-    } catch (error) {
-      _isAuthenticated = false;
-      _token = null;
-      _userId = null;
+    } on FirebaseAuthException catch (e) {
+      // Handle specific Firebase Auth errors
+      String errorMessage;
+      switch (e.code) {
+        case 'user-not-found':
+          errorMessage = 'No account found with this email.';
+          break;
+        case 'wrong-password':
+          errorMessage = 'Incorrect password.';
+          break;
+        case 'invalid-email':
+          errorMessage = 'The email address is invalid.';
+          break;
+        case 'user-disabled':
+          errorMessage = 'This account has been disabled.';
+          break;
+        default:
+          errorMessage = e.message ?? 'Login failed. Please try again.';
+      }
+      throw Exception(errorMessage);
+    } catch (e) {
+      throw Exception('An unexpected error occurred: $e');
+    }
+  }
+
+  Future<void> signUp(String email, String password) async {
+    try {
+      final credential = await _auth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      _user = credential.user;
       notifyListeners();
-      rethrow;
+    } on FirebaseAuthException catch (e) {
+      // Handle specific Firebase Auth errors
+      String errorMessage;
+      switch (e.code) {
+        case 'weak-password':
+          errorMessage = 'The password is too weak. Please use at least 6 characters.';
+          break;
+        case 'email-already-in-use':
+          errorMessage = 'An account already exists with this email.';
+          break;
+        case 'invalid-email':
+          errorMessage = 'The email address is invalid.';
+          break;
+        case 'operation-not-allowed':
+          errorMessage = 'Email/password accounts are not enabled. Please contact support.';
+          break;
+        default:
+          errorMessage = e.message ?? 'Sign up failed. Please try again.';
+      }
+      throw Exception(errorMessage);
+    } catch (e) {
+      throw Exception('An unexpected error occurred: $e');
     }
   }
 
   Future<void> logout() async {
-    try {
-      _token = null;
-      _userId = null;
-      _isAuthenticated = false;
-      
-      // Clear stored auth data
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('token');
-      await prefs.remove('userId');
-    } catch (error) {
-      debugPrint('Error during logout: $error');
-    } finally {
-      notifyListeners();
-    }
+    await _auth.signOut();
+    _user = null;
+    notifyListeners();
   }
 
   Future<bool> checkAuthStatus() async {
-    if (_initialized) return _isAuthenticated;
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      _token = prefs.getString('token');
-      _userId = prefs.getString('userId');
-      _isAuthenticated = _token != null && _userId != null;
-    } catch (error) {
-      debugPrint('Error checking auth status: $error');
-      _isAuthenticated = false;
-      _token = null;
-      _userId = null;
-    } finally {
-      _initialized = true;
-      notifyListeners();
-    }
-    
-    return _isAuthenticated;
+    _user = _auth.currentUser;
+    notifyListeners();
+    return _user != null;
   }
-} 
+}
