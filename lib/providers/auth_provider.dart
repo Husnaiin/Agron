@@ -1,5 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:agron_gcs/services/mission_storage.dart';
 
 class AuthProvider with ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -49,6 +51,8 @@ class AuthProvider with ChangeNotifier {
         password: password,
       );
       _user = credential.user;
+      // Create user profile in Firestore
+      await MissionStorage().createUserProfile(email);
       notifyListeners();
     } on FirebaseAuthException catch (e) {
       // Handle specific Firebase Auth errors

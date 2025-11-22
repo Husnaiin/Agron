@@ -20,7 +20,7 @@ class _MissionScreenState extends State<MissionScreen> {
   @override
   void initState() {
     super.initState();
-    _missionsFuture = _missionStorage.getMissions();
+    _missionsFuture = _missionStorage.getMissions(); // Now uses Firestore
   }
 
   @override
@@ -61,9 +61,15 @@ class _MissionScreenState extends State<MissionScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                          'Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}'),
+                        'Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}',
+                      ),
+                      if (mission.completedAt != null)
+                        Text(
+                          'Completed: ${DateFormat.yMMMd().add_jm().format(mission.completedAt!)}',
+                        ),
                       Text(
-                          'Status: ${mission.status.toString().split('.').last}'),
+                        'Status: ${mission.status.toString().split('.').last}',
+                      ),
                       Text('Area: ${acres.toStringAsFixed(2)} acres'),
                       Text('Waypoints: ${mission.waypoints.length}'),
                     ],
@@ -130,7 +136,12 @@ class _MissionScreenState extends State<MissionScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                    'Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}'),
+                  'Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}',
+                ),
+                if (mission.completedAt != null)
+                  Text(
+                    'Completed: ${DateFormat.yMMMd().add_jm().format(mission.completedAt!)}',
+                  ),
                 const SizedBox(height: 8),
                 Text('Area: ${acres.toStringAsFixed(2)} acres'),
                 const SizedBox(height: 12),
@@ -177,12 +188,10 @@ class _MissionScreenState extends State<MissionScreen> {
     );
 
     if (confirmed == true) {
-      await _missionStorage.deleteMission(mission.id);
+      await _missionStorage.deleteMission(mission.id); // Now uses Firestore
       setState(() {
-        _missionsFuture = _missionStorage.getMissions();
+        _missionsFuture = _missionStorage.getMissions(); // Now uses Firestore
       }); // Refresh the list
     }
   }
-
-  // Removed unused details dialog to avoid linter warning; selection loads mission on map
 }

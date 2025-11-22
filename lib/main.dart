@@ -8,6 +8,7 @@ import 'package:agron_gcs/screens/auth/signup_screen.dart';
 import 'package:agron_gcs/screens/home/home_screen.dart';
 import 'package:agron_gcs/screens/mission_screen.dart';
 import 'package:agron_gcs/screens/chat_screen.dart';
+import 'package:agron_gcs/screens/profile_screen.dart';
 import 'package:agron_gcs/providers/auth_provider.dart';
 import 'package:agron_gcs/services/drone_service.dart';
 import 'package:agron_gcs/theme/app_theme.dart';
@@ -53,6 +54,7 @@ class MyApp extends StatelessWidget {
           '/home': (context) => const HomeScreen(),
           '/missions': (context) => const MissionScreen(),
           '/chat': (context) => const ChatScreen(),
+          '/profile': (context) => const ProfileScreen(),
         },
         debugShowCheckedModeBanner: false,
       ),
