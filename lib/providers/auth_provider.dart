@@ -1,6 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:agron_gcs/services/mission_storage.dart';
 
 class AuthProvider with ChangeNotifier {
