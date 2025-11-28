@@ -53,9 +53,16 @@ mavlink_pause_since = 0.0
 capture_task: asyncio.Task | None = None
 capture_stop_event: asyncio.Event | None = None
 capture_frame_counter: int = 0
+capture_session_counter: int = 0
 
-NOIR_DIR = pathlib.Path("/home/agron/Agron/noir")
-RGB_DIR = pathlib.Path("/home/agron/Agron/rgb")
+def _compute_capture_dirs() -> tuple[pathlib.Path, pathlib.Path]:
+    now = datetime.now()
+    day = now.day  # 1..31
+    mon = now.strftime("%b").lower()  # jan, feb, mar, ...
+    base = pathlib.Path(f"/home/agron/{day}-{mon}-data-agron")
+    return base / "noir", base / "rgb"
+
+NOIR_DIR, RGB_DIR = _compute_capture_dirs()
 
 def _ensure_capture_dirs():
     try:
@@ -96,7 +103,7 @@ async def _capture_once(camera_index: int, output_path: pathlib.Path) -> bool:
             "--camera", str(camera_index),
             "-n",
             "-t", "1",
-            # "--shutter", "2000", # 1/1000s exposure
+            "--shutter", "300", # 1/1000s exposure
             # "--gain", "8",       # boost if light is low (tweak as needed)
             "-o", str(output_path),
             stdout=PIPE, stderr=PIPE,
@@ -110,7 +117,7 @@ async def _capture_once(camera_index: int, output_path: pathlib.Path) -> bool:
         print(f"[CAMERA] capture exception (cam {camera_index}): {e}")
         return False
 
-async def _capture_loop(stop_event: asyncio.Event, interval_seconds: float = 2.0):
+async def _capture_loop(stop_event: asyncio.Event, interval_seconds: float = 0.5):
     print("[CAMERA] Capture loop started")
     _ensure_capture_dirs()
     await _list_cameras()
@@ -125,7 +132,21 @@ async def _capture_loop(stop_event: asyncio.Event, interval_seconds: float = 2.0
         except Exception:
             alt_int = 0
         frame_no = capture_frame_counter + 1
-        base = f"{ts}_{frame_no}_{alt_int}"
+        # Session id
+        sess = capture_session_counter if isinstance(capture_session_counter, int) and capture_session_counter > 0 else 1
+        # Current coordinates (fallback to last good if missing)
+        try:
+            lat_val = drone_latitude if drone_latitude not in (None, 0.0) else (globals().get("last_good_latitude") or 0.0)
+            lon_val = drone_longitude if drone_longitude not in (None, 0.0) else (globals().get("last_good_longitude") or 0.0)
+        except Exception:
+            lat_val, lon_val = 0.0, 0.0
+        try:
+            lat_str = f"{float(lat_val):.5f}"
+            lon_str = f"{float(lon_val):.5f}"
+        except Exception:
+            lat_str, lon_str = "0.00000", "0.00000"
+
+        base = f"session_{sess}_{ts}_{frame_no}_{alt_int}_{lat_str}_{lon_str}"
         noir_path = NOIR_DIR / f"{base}_noir.jpg"
         rgb_path = RGB_DIR / f"{base}_rgb.jpg"
 
@@ -309,8 +330,9 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
         if capture_task and not capture_task.done():
             print("[CAMERA] Capture already running")
         else:
-            global capture_frame_counter
+            global capture_frame_counter, capture_session_counter
             capture_frame_counter = 0
+            capture_session_counter = (capture_session_counter or 0) + 1
             capture_stop_event = asyncio.Event()
             capture_task = asyncio.create_task(_capture_loop(capture_stop_event, interval_seconds=2.0))
         await broadcast_message({"type": "camera_status", "status": "capture_started"})
@@ -344,10 +366,8 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
             await websocket.send_json({"type": "mission_status", "status": "error", "message": "no waypoints provided"})
             return
 
-        # Build mission items with provided altitude/speed (defaults if missing)
-        target_alt = float(message.get("defaultAltitude") or 20.0)
-        target_speed = float(message.get("defaultSpeed") or 5.0)
-        print(f"[MISSION] upload_mission received with {len(raw_wps)} waypoints alt={target_alt}m speed={target_speed}m/s")
+        # Build mission items: TAKEOFF (20m) -> WAYPOINTS (20m) -> RTL
+        print(f"[MISSION] upload_mission received with {len(raw_wps)} waypoints")
         try:
             frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
             cmds_int = []  # MISSION_ITEM_INT messages
@@ -403,7 +423,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 3.0, 0, 0, 0,
                 int(first_lat * 1e7),
                 int(first_lon * 1e7),
-                float(target_alt),
+                20.0,
             )
             wp0_flt = mavutil.mavlink.MAVLink_mission_item_message(
                 m.target_system,
@@ -416,7 +436,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 3.0, 0, 0, 0,
                 float(first_lat),
                 float(first_lon),
-                float(target_alt),
+                20.0,
             )
             cmds_int.append(wp0_int)
             cmds_flt.append(wp0_flt)
@@ -436,7 +456,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 # int(first_lon * 1e7),
                 0,
                 0,
-                float(target_alt),
+                20.0,
             )
             takeoff_flt = mavutil.mavlink.MAVLink_mission_item_message(
                 m.target_system,
@@ -451,7 +471,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 # float(first_lon),
                 0,
                 0,
-                float(target_alt),
+                20.0,
             )
             cmds_int.append(takeoff_int)
             cmds_flt.append(takeoff_flt)
@@ -471,7 +491,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 0, 0, 0, 0,
                 int(first_lat * 1e7),
                 int(first_lon * 1e7),
-                float(target_alt),
+                20.0,
             )
             wp_first_flt = mavutil.mavlink.MAVLink_mission_item_message(
                 m.target_system,
@@ -484,7 +504,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 0, 0, 0, 0,
                 float(first_lat),
                 float(first_lon),
-                float(target_alt),
+                20.0,
             )
             cmds_int.append(wp_first_int)
             cmds_flt.append(wp_first_flt)
@@ -493,28 +513,6 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
             prepared_wp += 1
 
             # Remaining waypoints (skip the first, already added twice)
-            # Insert a DO_CHANGE_SPEED before remaining waypoints
-            try:
-                m.mav.command_long_send(
-                    m.target_system,
-                    m.target_component or mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1,
-                    mavutil.mavlink.MAV_CMD_DO_CHANGE_SPEED,
-                    0,
-                    1,  # groundspeed
-                    float(target_speed),
-                    -1, 0, 0, 0, 0,
-                )
-                # Also attempt param set as a backup
-                m.mav.param_set_send(
-                    m.target_system,
-                    m.target_component or mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1,
-                    b"WPNAV_SPEED",
-                    float(max(0.0, target_speed) * 100.0),
-                    mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
-                )
-            except Exception:
-                pass
-
             for wp in raw_wps[1:]:
                 lat, lon = _extract_lat_lon(wp)
                 if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
@@ -530,7 +528,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                     0, 0, 0, 0,
                     int(lat * 1e7),
                     int(lon * 1e7),
-                    float(target_alt),
+                    20.0,
                 )
                 wp_flt = mavutil.mavlink.MAVLink_mission_item_message(
                     m.target_system,
@@ -543,7 +541,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                     0, 0, 0, 0,
                     float(lat),
                     float(lon),
-                    float(target_alt),
+                    20.0,
                 )
                 cmds_int.append(wp_int)
                 cmds_flt.append(wp_flt)
@@ -1119,3 +1117,7 @@ def status():
     return {"status": "running", "clients": len(connected_clients)}
 #source /home/agron/gcs-server/venv/bin/activate
 #uvicorn server1:app --host 0.0.0.0 --port 5001 --reload
+#sudo systemctl start gcs-server
+#sudo systemctl stop gcs-server
+#sudo systemctl restart gcs-server
+#sudo systemctl status gcs-server --no-pager
