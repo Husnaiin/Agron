@@ -118,13 +118,6 @@ class _AIMissionInputScreenState extends State<AIMissionInputScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
               const Text('Your description:', style: TextStyle(fontWeight: FontWeight.bold)),
               Text('"$description"', style: const TextStyle(fontStyle: FontStyle.italic)),
               const SizedBox(height: 16),
