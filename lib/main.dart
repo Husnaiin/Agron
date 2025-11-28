@@ -13,12 +13,14 @@ import 'package:agron_gcs/providers/auth_provider.dart';
 import 'package:agron_gcs/services/drone_service.dart';
 import 'package:agron_gcs/theme/app_theme.dart';
 import 'package:agron_gcs/services/mission_services.dart';
+import 'package:agron_gcs/services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await NotificationService().initialize();
   runApp(const MyApp());
 }
 
