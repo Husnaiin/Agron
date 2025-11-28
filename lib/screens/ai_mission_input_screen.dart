@@ -68,19 +68,14 @@ class _AIMissionInputScreenState extends State<AIMissionInputScreen> {
     });
 
     try {
-      // AI PROCESSING: Convert natural language to waypoints
       final waypoints = await _aiPlanner.generateWaypointsFromText(
         description: description,
         centerLocation: widget.currentLocation,
       );
 
-      // Analyze mission type using NLP
       final missionType = await _aiPlanner.analyzeMissionType(description);
-
-      // Determine if spray is enabled based on mission type
       final isSprayMission = missionType.toLowerCase().contains('spray');
 
-      // Create mission object with all required parameters
       final mission = Mission(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         name: 'AI: $missionType',
@@ -98,8 +93,6 @@ class _AIMissionInputScreenState extends State<AIMissionInputScreen> {
       );
 
       setState(() => _isGenerating = false);
-
-      // Show preview before saving
       _showMissionPreview(mission, description);
     } catch (e) {
       setState(() {
@@ -118,6 +111,13 @@ class _AIMissionInputScreenState extends State<AIMissionInputScreen> {
             Icon(Icons.auto_awesome, color: Colors.purple),
             SizedBox(width: 8),
             Text('AI Generated Mission'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           ],
         ),
         content: SingleChildScrollView(
