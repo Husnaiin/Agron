@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:agron_gcs/services/mission_storage.dart';
 import 'package:agron_gcs/services/drone_service.dart';
 import 'package:agron_gcs/models/mission.dart';
+import 'package:agron_gcs/screens/ai_mission_input_screen.dart';
 
 class MissionScreen extends StatefulWidget {
   const MissionScreen({super.key});
@@ -28,6 +29,13 @@ class _MissionScreenState extends State<MissionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Mission History'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.auto_awesome),
+            onPressed: _openAIMissionPlanner,
+            tooltip: 'AI Mission Planning',
+          ),
+        ],
       ),
       body: FutureBuilder<List<Mission>>(
         future: _missionsFuture,
@@ -97,6 +105,11 @@ class _MissionScreenState extends State<MissionScreen> {
             },
           );
         },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openAIMissionPlanner,
+        icon: const Icon(Icons.auto_awesome),
+        label: const Text('AI Create Mission'),
       ),
     );
   }
@@ -192,6 +205,32 @@ class _MissionScreenState extends State<MissionScreen> {
       setState(() {
         _missionsFuture = _missionStorage.getMissions(); // Now uses Firestore
       }); // Refresh the list
+    }
+  }
+
+  Future<void> _openAIMissionPlanner() async {
+    // Get current location (use a default or get from GPS)
+    final LatLng currentLocation = LatLng(31.5204, 74.3587); // Default Lahore
+
+    final mission = await Navigator.push<Mission>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AIMissionInputScreen(currentLocation: currentLocation),
+      ),
+    );
+
+    if (mission != null) {
+      await _missionStorage.saveMission(mission);
+      setState(() {
+        _missionsFuture = _missionStorage.getMissions();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('AI Mission created successfully!'),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 }
