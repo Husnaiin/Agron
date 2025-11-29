@@ -9,6 +9,7 @@ import '../models/telemetry.dart';
 import '../models/mission.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:math';
+import 'mission_storage.dart';
 
 class DroneService extends ChangeNotifier {
   static const String defaultBaseUrl =
@@ -33,6 +34,9 @@ class DroneService extends ChangeNotifier {
   bool _isMissionFromHistory = false;
   double? _targetAltitude;
   double? _targetSpeed;
+  final MissionStorage _missionStorage = MissionStorage();
+  int _currentWaypointIndex = 0;
+  int _totalWaypoints = 0;
 
   Stream<Telemetry> get telemetryStream => _telemetryController.stream;
   bool get isConnected => _isConnected;
@@ -156,13 +160,23 @@ class DroneService extends ChangeNotifier {
   List<LatLng> _generateDensePath(List<LatLng> hull, double altitudeM,
       {LatLng? startPoint, bool returnToStart = true}) {
     if (hull.length < 3) return const <LatLng>[];
+    
     final spacing = _computeFootprintAndSpacing(altitudeM: altitudeM);
+    
+    // Calculate scanline spacing (perpendicular to flight direction)
     final dLat = _metersToDegreesLat(spacing.acrossTrackSpacingM);
+    
+    // Find bounds of the polygon
     double minLat = hull.first.latitude, maxLat = hull.first.latitude;
+    double minLon = hull.first.longitude, maxLon = hull.first.longitude;
     for (final p in hull) {
       if (p.latitude < minLat) minLat = p.latitude;
       if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLon) minLon = p.longitude;
+      if (p.longitude > maxLon) maxLon = p.longitude;
     }
+    
+    // Helper function to find intersections of horizontal line with polygon
     List<double> intersectionsAtLat(double lat) {
       final List<double> xs = [];
       for (int i = 0; i < hull.length; i++) {
@@ -170,85 +184,125 @@ class DroneService extends ChangeNotifier {
         final b = hull[(i + 1) % hull.length];
         final minY = min(a.latitude, b.latitude);
         final maxY = max(a.latitude, b.latitude);
+        
+        // Skip if line doesn't intersect this edge
         if (lat < minY || lat > maxY) continue;
-        if (lat == maxY) continue;
+        if (lat == maxY) continue; // Avoid double-counting vertices
+        
+        // Handle horizontal edges
         if ((b.latitude - a.latitude).abs() < 1e-12) {
           xs.addAll([a.longitude, b.longitude]);
           continue;
         }
+        
+        // Calculate intersection point
         final t = (lat - a.latitude) / (b.latitude - a.latitude);
         xs.add(a.longitude + t * (b.longitude - a.longitude));
       }
+      
+      // Sort and remove duplicates
       xs.sort();
-      return xs;
+      final unique = <double>[];
+      for (int i = 0; i < xs.length; i++) {
+        if (i == 0 || (xs[i] - xs[i-1]).abs() > 1e-9) {
+          unique.add(xs[i]);
+        }
+      }
+      return unique;
     }
-
-    double dLonFor(double lat) =>
-        _metersToDegreesLon(spacing.alongTrackSpacingM, lat);
+    
+    // Generate boustrophedon (lawnmower) pattern
     List<LatLng> result = [];
     bool reverse = false;
+    
     for (double y = minLat; y <= maxLat + 1e-9; y += dLat) {
       final xs = intersectionsAtLat(y);
       if (xs.length < 2) continue;
+      
+      // Process each segment of the scanline (for polygons with holes or complex shapes)
       for (int k = 0; k + 1 < xs.length; k += 2) {
         double x0 = xs[k];
         double x1 = xs[k + 1];
+        
+        // Ensure x0 < x1
         if (x1 < x0) {
           final t = x0;
           x0 = x1;
           x1 = t;
         }
-        final stepLon = dLonFor(y).abs();
+        
+        // Calculate longitudinal spacing for this latitude
+        final stepLon = _metersToDegreesLon(spacing.alongTrackSpacingM, y).abs();
         if (stepLon <= 0) continue;
+        
+        // Generate all waypoints along this scanline segment
         List<LatLng> row = [];
         for (double x = x0; x <= x1 + 1e-12; x += stepLon) {
-          row.add(LatLng(y, x));
+          row.add(LatLng(y, min(x, x1))); // Clamp to avoid overshooting
         }
-        if (row.isEmpty || (row.last.longitude - x1).abs() > 1e-9) {
+        
+        // Ensure endpoint is included
+        if (row.isEmpty || (row.last.longitude - x1).abs() > stepLon * 0.5) {
           row.add(LatLng(y, x1));
         }
+        
+        // Reverse every other row for boustrophedon pattern
         if (reverse) row = row.reversed.toList();
-        // Only add first and last point of each row (edge points of straight segment)
-        if (row.isNotEmpty) {
-          if (row.length == 1) {
-            result.add(row.first);
-          } else {
-            result.add(row.first);
-            result.add(row.last);
-          }
-        }
+        
+        // Add all points in this row (no simplification yet)
+        result.addAll(row);
+        
         reverse = !reverse;
       }
     }
-
-    // Further simplify: remove intermediate points where direction change is minimal
-    result = _simplifyPath(result, minBearingChangeDeg: 5.0);
-
-    // If a start point is provided, reorder path to start from nearest point
+    
+    // Remove consecutive duplicate points
+    if (result.length > 1) {
+      final deduped = <LatLng>[result.first];
+      for (int i = 1; i < result.length; i++) {
+        final prev = deduped.last;
+        final curr = result[i];
+        final dist = _haversineMeters(prev, curr);
+        // Only add if distance is significant (> 0.5m)
+        if (dist > 0.5) {
+          deduped.add(curr);
+        }
+      }
+      result = deduped;
+    }
+    
+    // If start point provided, reorder to begin from nearest waypoint
     if (startPoint != null && result.isNotEmpty) {
       int nearestIdx = 0;
-      double best = double.infinity;
+      double bestDist = double.infinity;
       for (int i = 0; i < result.length; i++) {
         final d = _haversineMeters(startPoint, result[i]);
-        if (d < best) {
-          best = d;
+        if (d < bestDist) {
+          bestDist = d;
           nearestIdx = i;
         }
       }
+      
+      // Reorder path to start from nearest point
       if (nearestIdx != 0) {
         final reordered = <LatLng>[];
         reordered.addAll(result.sublist(nearestIdx));
         reordered.addAll(result.sublist(0, nearestIdx));
-        result
-          ..clear()
-          ..addAll(reordered);
+        result = reordered;
       }
-      // Prepend the exact start point as the first waypoint
+      
+      // Add start point as first waypoint
       result.insert(0, startPoint);
-      if (returnToStart) {
+      
+      // Optionally return to start
+      if (returnToStart && _haversineMeters(result.last, startPoint) > 1.0) {
         result.add(startPoint);
       }
     }
+    
+    debugPrint('[DENSE_PATH] Generated ${result.length} waypoints for ${altitudeM}m altitude');
+    debugPrint('[DENSE_PATH] Coverage: ${spacing.acrossTrackSpacingM.toStringAsFixed(1)}m x ${spacing.alongTrackSpacingM.toStringAsFixed(1)}m spacing');
+    
     return result;
   }
 
@@ -332,10 +386,13 @@ class DroneService extends ChangeNotifier {
           'defaultAltitude': mission.defaultAltitude,
           'defaultSprayRate': mission.defaultSprayRate,
           'defaultSpeed': mission.defaultSpeed,
+          'mission_type': _selectedMissionType,
         };
         _wsChannel!.sink.add(json.encode(message));
       } else if (socket != null) {
-        socket!.emit('upload_mission', missionJson);
+        final socketMessage = Map<String, dynamic>.from(missionJson);
+        socketMessage['mission_type'] = _selectedMissionType;
+        socket!.emit('upload_mission', socketMessage);
       } else {
         throw Exception('Not connected to server');
       }
@@ -354,45 +411,20 @@ class DroneService extends ChangeNotifier {
   List<MissionWaypoint> _buildEffectiveWaypoints(Mission mission) {
     final missionType = _selectedMissionType;
     final userPoints = mission.waypoints.map((w) => w.position).toList();
-    // Ensure first point is treated as drone start; compute from user points excluding first when building hull/path
-    final hasStart = userPoints.isNotEmpty;
-    final startPoint = hasStart ? userPoints.first : null;
-    final restPoints = hasStart ? userPoints.sublist(1) : <LatLng>[];
+    
     if (userPoints.length < 3) return mission.waypoints;
 
-    if (missionType == 'dense_inspection') {
-      final hull =
-          _computeConvexHull(restPoints.isNotEmpty ? restPoints : userPoints);
-      // Use target altitude if set, otherwise use mission default
-      // Minimum altitude for path calculation is 10m
-      final altitude = max(10.0, _targetAltitude ?? mission.defaultAltitude);
-      final path = _generateDensePath(hull, altitude,
-          startPoint: startPoint, returnToStart: true);
-      final effective = <MissionWaypoint>[];
-      effective.addAll(path
-          .map((p) => MissionWaypoint(
-                position: p,
-                altitude:
-                    altitude, // Use calculated altitude for path generation
-                sprayRate: mission.defaultSprayRate,
-                sprayEnabled: true,
-              ))
-          .toList());
-      return effective;
+    // For dense_inspection and dimr: waypoints are ALREADY the generated dense pattern
+    // Do NOT regenerate - just return them as-is
+    if (missionType == 'dense_inspection' || missionType == 'dimr') {
+      debugPrint('[MISSION] Dense mission: using pre-generated ${mission.waypoints.length} waypoints');
+      return mission.waypoints;
     }
 
+    // For inspection: compute convex hull of user-drawn polygon
     if (missionType == 'inspection') {
-      final hull =
-          _computeConvexHull(restPoints.isNotEmpty ? restPoints : userPoints);
+      final hull = _computeConvexHull(userPoints);
       final effective = <MissionWaypoint>[];
-      if (startPoint != null) {
-        effective.add(MissionWaypoint(
-          position: startPoint,
-          altitude: mission.defaultAltitude,
-          sprayRate: mission.defaultSprayRate,
-          sprayEnabled: true,
-        ));
-      }
       effective.addAll(hull
           .map((p) => MissionWaypoint(
                 position: p,
@@ -401,10 +433,12 @@ class DroneService extends ChangeNotifier {
                 sprayEnabled: true,
               ))
           .toList());
+      debugPrint('[MISSION] Inspection: using hull with ${effective.length} waypoints');
       return effective;
     }
 
-    // spraying or default: use user-selected points
+    // spraying or default: use user-selected points as-is
+    debugPrint('[MISSION] ${missionType}: using ${mission.waypoints.length} user waypoints');
     return mission.waypoints;
   }
 
@@ -428,9 +462,25 @@ class DroneService extends ChangeNotifier {
   }
 
   Future<void> connectToDrone(String ipAddress) async {
-    if (_isConnecting) return;
+    debugPrint('[CONNECTION] connectToDrone called with IP: $ipAddress');
+    
+    if (_isConnecting) {
+      debugPrint('[CONNECTION] Already connecting, ignoring request');
+      return;
+    }
+    
     _userInitiatedDisconnect = false;
     _lastIpAddress = ipAddress;
+    
+    // Save IP address to SharedPreferences for persistence
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('last_connection_ip', ipAddress);
+      await prefs.setString('last_connection_type', 'socket_io');
+      debugPrint('[RECONNECT] Saved IP to prefs: $ipAddress (Socket.IO)');
+    } catch (e) {
+      debugPrint('[RECONNECT] Failed to save IP to prefs: $e');
+    }
 
     // Cancel any existing reconnect timer
     _reconnectTimer?.cancel();
@@ -442,7 +492,7 @@ class DroneService extends ChangeNotifier {
     try {
       // Update base URL with the provided IP address
       _baseUrl = 'http://$ipAddress:5000';
-      debugPrint('Attempting to connect to drone at $_baseUrl');
+      debugPrint('[CONNECTION] Attempting to connect to drone at $_baseUrl');
 
       // Test connection with a simple HTTP request
       debugPrint('Testing HTTP connection...');
@@ -510,9 +560,25 @@ class DroneService extends ChangeNotifier {
   }
 
   Future<void> connectToTelemetryWs(String ipAddressOrUrl) async {
-    if (_isConnecting) return;
+    debugPrint('[CONNECTION] connectToTelemetryWs called with: $ipAddressOrUrl');
+    
+    if (_isConnecting) {
+      debugPrint('[CONNECTION] Already connecting, ignoring request');
+      return;
+    }
+    
     _userInitiatedDisconnect = false;
     _lastIpAddress = ipAddressOrUrl;
+    
+    // Save IP address to SharedPreferences for persistence
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('last_connection_ip', ipAddressOrUrl);
+      await prefs.setString('last_connection_type', 'websocket');
+      debugPrint('[RECONNECT] Saved IP to prefs: $ipAddressOrUrl (WebSocket)');
+    } catch (e) {
+      debugPrint('[RECONNECT] Failed to save IP to prefs: $e');
+    }
 
     _isConnecting = true;
     _connectionError = null;
@@ -546,7 +612,7 @@ class DroneService extends ChangeNotifier {
         port = 5001;
         uri = Uri.parse('ws://$host:$port/ws/telemetry');
       }
-      debugPrint('Connecting to WS telemetry at $uri');
+      debugPrint('[CONNECTION] Connecting to WS telemetry at $uri (host: $host, port: $port)');
 
       // Test HTTP connection first to validate the server exists
       final httpResponse = await http
@@ -559,7 +625,7 @@ class DroneService extends ChangeNotifier {
 
       _wsChannel = WebSocketChannel.connect(uri);
 
-      _wsSubscription = _wsChannel!.stream.listen((message) {
+      _wsSubscription = _wsChannel!.stream.listen((message) async {
         try {
           Map<String, dynamic> telemetryData;
           if (message is String) {
@@ -587,11 +653,58 @@ class DroneService extends ChangeNotifier {
             final telemetry = Telemetry.fromJson(telemetryData);
             _telemetryController.add(telemetry);
             _persistLastKnownDronePosition(telemetry);
+            
+            // Track mission progress
+            if (_isMissionActive && _currentMission != null) {
+              final wpIndex = telemetryData['currentWaypointIndex'] as int? ?? 0;
+              final totalWps = telemetryData['totalWaypoints'] as int? ?? 0;
+              
+              if (wpIndex != _currentWaypointIndex || totalWps != _totalWaypoints) {
+                _currentWaypointIndex = wpIndex;
+                _totalWaypoints = totalWps;
+                
+                // Update mission progress in storage (fire and forget)
+                if (totalWps > 0) {
+                  final progressPercentage = ((wpIndex / totalWps) * 100).round();
+                  _missionStorage.updateMissionProgress(
+                    _currentMission!.id,
+                    progressPercentage,
+                    wpIndex,
+                  ).catchError((e) {
+                    debugPrint('[PROGRESS] Failed to update mission progress: $e');
+                  });
+                }
+              }
+            }
+            
             notifyListeners();
-            debugPrint('WS telemetry received: $telemetryData');
+            debugPrint('WS telemetry received: lat=${telemetry.latitude}, lon=${telemetry.longitude}, progress=${telemetry.missionProgress}%');
           } else if (messageType == 'mission_status') {
             debugPrint('Mission status: ${telemetryData['status']}');
-            // Handle mission status updates
+            final status = telemetryData['status'];
+            if (status == 'rtl_battery_low') {
+              _isMissionActive = false;
+              
+              // Save mission progress from RTL trigger (fire and forget)
+              if (_currentMission != null && telemetryData.containsKey('progressPercentage')) {
+                final progressPercentage = telemetryData['progressPercentage'] as int;
+                final currentWaypointIndex = telemetryData['currentWaypointIndex'] as int;
+                
+                _missionStorage.updateMissionProgress(
+                  _currentMission!.id,
+                  progressPercentage,
+                  currentWaypointIndex,
+                ).then((_) {
+                  debugPrint('[RTL] Mission progress saved: $progressPercentage% (waypoint $currentWaypointIndex)');
+                }).catchError((e) {
+                  debugPrint('[RTL] Failed to save mission progress: $e');
+                });
+              }
+              
+              notifyListeners();
+              debugPrint('Mission paused - RTL triggered due to low battery: ${telemetryData['battery']}%');
+            }
+            // Handle other mission status updates
           }
         } catch (e, st) {
           debugPrint('Error processing WS message: $e');
@@ -717,9 +830,31 @@ class DroneService extends ChangeNotifier {
 
     socket!.on('mission_status', (data) {
       debugPrint('Mission status received: $data');
-      if (data['status'] == 'completed') {
+      final status = data['status'];
+      if (status == 'completed') {
         _isMissionActive = false;
         notifyListeners();
+      } else if (status == 'rtl_battery_low') {
+        _isMissionActive = false;
+        
+        // Save mission progress from RTL trigger (fire and forget)
+        if (_currentMission != null && data.containsKey('progressPercentage')) {
+          final progressPercentage = data['progressPercentage'] as int;
+          final currentWaypointIndex = data['currentWaypointIndex'] as int;
+          
+          _missionStorage.updateMissionProgress(
+            _currentMission!.id,
+            progressPercentage,
+            currentWaypointIndex,
+          ).then((_) {
+            debugPrint('[RTL] Mission progress saved: $progressPercentage% (waypoint $currentWaypointIndex)');
+          }).catchError((e) {
+            debugPrint('[RTL] Failed to save mission progress: $e');
+          });
+        }
+        
+        notifyListeners();
+        debugPrint('Mission paused - RTL triggered due to low battery: ${data['battery']}%');
       }
     });
 
@@ -742,6 +877,30 @@ class DroneService extends ChangeNotifier {
 
           final telemetry = Telemetry.fromJson(telemetryData);
           _telemetryController.add(telemetry);
+          
+          // Track mission progress
+          if (_isMissionActive && _currentMission != null) {
+            final wpIndex = telemetryData['currentWaypointIndex'] as int? ?? 0;
+            final totalWps = telemetryData['totalWaypoints'] as int? ?? 0;
+            
+            if (wpIndex != _currentWaypointIndex || totalWps != _totalWaypoints) {
+              _currentWaypointIndex = wpIndex;
+              _totalWaypoints = totalWps;
+              
+              // Update mission progress in storage (fire and forget)
+              if (totalWps > 0) {
+                final progressPercentage = ((wpIndex / totalWps) * 100).round();
+                _missionStorage.updateMissionProgress(
+                  _currentMission!.id,
+                  progressPercentage,
+                  wpIndex,
+                ).catchError((e) {
+                  debugPrint('[PROGRESS] Failed to update mission progress: $e');
+                });
+              }
+            }
+          }
+          
           notifyListeners();
 
           // Print detailed telemetry data
@@ -774,24 +933,49 @@ Timestamp: ${telemetry.timestamp}
 
   void _scheduleReconnect() {
     if (_userInitiatedDisconnect) {
-      debugPrint('Auto-reconnect disabled due to user-initiated disconnect');
+      debugPrint('[RECONNECT] Auto-reconnect disabled due to user-initiated disconnect');
       return;
     }
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 5), () {
+    _reconnectTimer = Timer(const Duration(seconds: 5), () async {
       if (_isConnected || _isConnecting) return;
-      if (_lastIpAddress == null) return;
-      debugPrint('Auto-reconnect attempting to reconnect...');
+      
+      // Try to load saved IP from SharedPreferences if _lastIpAddress is null
+      if (_lastIpAddress == null) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final savedIp = prefs.getString('last_connection_ip');
+          final savedType = prefs.getString('last_connection_type');
+          if (savedIp != null) {
+            _lastIpAddress = savedIp;
+            debugPrint('[RECONNECT] Loaded saved IP from prefs: $savedIp ($savedType)');
+          } else {
+            debugPrint('[RECONNECT] No saved IP found, cannot reconnect');
+            return;
+          }
+        } catch (e) {
+          debugPrint('[RECONNECT] Failed to load IP from prefs: $e');
+          return;
+        }
+      }
+      
+      debugPrint('[RECONNECT] Attempting to reconnect to: $_lastIpAddress');
+      debugPrint('[RECONNECT] Current baseUrl: $_baseUrl');
+      
       // If last connection was WS (baseUrl starts with ws://), try WS; else Socket.IO
       if (_baseUrl.startsWith('ws://') || _baseUrl.startsWith('wss://')) {
+        debugPrint('[RECONNECT] Using WebSocket connection method');
         connectToTelemetryWs(_lastIpAddress!);
       } else {
+        debugPrint('[RECONNECT] Using Socket.IO connection method');
         connectToDrone(_lastIpAddress!);
       }
     });
   }
 
   Future<void> disconnectFromDrone() async {
+    debugPrint('[CONNECTION] Manual disconnect initiated');
+    
     // Cancel any reconnect timer
     _reconnectTimer?.cancel();
     _userInitiatedDisconnect = true;
@@ -811,10 +995,10 @@ Timestamp: ${telemetry.timestamp}
     _isConnecting = false;
     _connectionError = null;
     notifyListeners();
-    debugPrint('Disconnected from drone');
+    debugPrint('[CONNECTION] Disconnected from drone (user initiated)');
   }
 
-  Future<void> startMission(Mission? mission) async {
+  Future<void> startMission(Mission? mission, {bool isResume = false}) async {
     if (!_isInitialized) throw Exception('DroneService not initialized');
 
     final missionToStart = mission ?? _currentMission;
@@ -827,11 +1011,23 @@ Timestamp: ${telemetry.timestamp}
 
     // Start mission if connected to either Socket.IO server or WS telemetry server
     if (_isConnected && (socket != null || _wsChannel != null)) {
-      debugPrint(
-          'Starting mission with waypoints: ${missionToStart.waypoints.length}');
+      // Build effective waypoints based on mission type
+      List<MissionWaypoint> effectiveWaypoints = _buildEffectiveWaypoints(missionToStart);
+      
+      // If resuming, slice waypoints array to continue from last completed waypoint
+      if (isResume && missionToStart.lastCompletedWaypointIndex >= 0) {
+        final resumeFromIndex = missionToStart.lastCompletedWaypointIndex;
+        debugPrint('[RESUME] Slicing waypoints from index $resumeFromIndex (total: ${effectiveWaypoints.length})');
+        
+        if (resumeFromIndex < effectiveWaypoints.length) {
+          effectiveWaypoints = effectiveWaypoints.sublist(resumeFromIndex);
+          debugPrint('[RESUME] Remaining waypoints: ${effectiveWaypoints.length}');
+        }
+      }
+      
+      debugPrint('Starting mission with waypoints: ${effectiveWaypoints.length}');
 
-      // Convert effective mission to JSON and print for debugging
-      final effectiveWaypoints = _buildEffectiveWaypoints(missionToStart);
+      // Convert effective mission to JSON
       final effectiveMission = Mission(
         id: missionToStart.id,
         name: missionToStart.name,
@@ -855,7 +1051,9 @@ Timestamp: ${telemetry.timestamp}
       if (socket != null) {
         // Send mission data to Socket.IO server
         debugPrint('Emitting start_mission event...');
-        socket!.emit('start_mission', missionJson);
+        final socketMessage = Map<String, dynamic>.from(missionJson);
+        socketMessage['mission_type'] = _selectedMissionType;
+        socket!.emit('start_mission', socketMessage);
 
         // Wait for mission status confirmation
         await Future.delayed(const Duration(seconds: 2));
@@ -874,6 +1072,7 @@ Timestamp: ${telemetry.timestamp}
           'waypoints': missionJson['waypoints'],
           'defaultAltitude': missionToStart.defaultAltitude,
           'defaultSpeed': missionToStart.defaultSpeed,
+          'mission_type': _selectedMissionType,
         };
         _wsChannel!.sink.add(json.encode(message));
 

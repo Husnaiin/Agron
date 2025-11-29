@@ -283,6 +283,23 @@ class _MapViewState extends State<MapView> {
         reverse = !reverse; // alternate direction for boustrophedon
       }
     }
+    
+    // Remove consecutive duplicate points
+    if (result.length > 1) {
+      final deduped = <LatLng>[result.first];
+      for (int i = 1; i < result.length; i++) {
+        final prev = deduped.last;
+        final curr = result[i];
+        final dist = _calculateDistance(prev, curr);
+        // Only add if distance is significant (> 0.5m)
+        if (dist > 0.5) {
+          deduped.add(curr);
+        }
+      }
+      result.clear();
+      result.addAll(deduped);
+    }
+    
     // If a start point is provided, reorder to nearest entry and add start/return
     if (startPoint != null && result.isNotEmpty) {
       int nearestIdx = 0;
@@ -443,28 +460,44 @@ class _MapViewState extends State<MapView> {
       return null;
     }
 
-    // Build waypoint list: first = current drone location, then user-selected points
-    final List<LatLng> combinedPoints = [];
-    if (_droneLocation != null) {
-      combinedPoints.add(_droneLocation!);
-    }
-    // Avoid immediate duplicate if user first point equals last added point
-    bool isSamePoint(LatLng a, LatLng b) {
-      const double epsilon = 1e-6;
-      return (a.latitude - b.latitude).abs() < epsilon &&
-          (a.longitude - b.longitude).abs() < epsilon;
-    }
-
-    for (final p in _points) {
-      if (combinedPoints.isEmpty || !isSamePoint(combinedPoints.last, p)) {
-        combinedPoints.add(p);
+    // Determine mission type
+    final missionType = _droneService.selectedMissionType;
+    
+    // For dense missions: use the generated dense path waypoints
+    // For other missions: use user-drawn polygon points
+    List<LatLng> waypointsToSave;
+    
+    if ((missionType == 'dense_inspection' || missionType == 'dimr') && 
+        _densePathPoints.isNotEmpty) {
+      // Use the pre-generated dense path (what's shown in preview)
+      waypointsToSave = List<LatLng>.from(_densePathPoints);
+      debugPrint('[SAVE_MISSION] Saving dense mission with ${waypointsToSave.length} pre-generated waypoints');
+    } else {
+      // Build waypoint list: first = current drone location, then user-selected points
+      waypointsToSave = [];
+      if (_droneLocation != null) {
+        waypointsToSave.add(_droneLocation!);
       }
+      
+      // Avoid immediate duplicate if user first point equals last added point
+      bool isSamePoint(LatLng a, LatLng b) {
+        const double epsilon = 1e-6;
+        return (a.latitude - b.latitude).abs() < epsilon &&
+            (a.longitude - b.longitude).abs() < epsilon;
+      }
+
+      for (final p in _points) {
+        if (waypointsToSave.isEmpty || !isSamePoint(waypointsToSave.last, p)) {
+          waypointsToSave.add(p);
+        }
+      }
+      debugPrint('[SAVE_MISSION] Saving $missionType mission with ${waypointsToSave.length} user waypoints');
     }
 
     final mission = Mission(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: 'Mission ${DateTime.now().toString()}',
-      waypoints: combinedPoints
+      waypoints: waypointsToSave
           .map((point) => MissionWaypoint(
                 position: point,
                 altitude: defaultAltitude,
@@ -647,7 +680,7 @@ class _MapViewState extends State<MapView> {
                   ),
                 ],
               ),
-              if (service.selectedMissionType == 'dense_inspection') ...[
+              if (service.selectedMissionType == 'dense_inspection' || service.selectedMissionType == 'dimr') ...[
                 // Show dense path preview derived from stored user points
                 Builder(builder: (context) {
                   final targetAlt =

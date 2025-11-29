@@ -58,6 +58,10 @@ class _MissionControlsState extends State<MissionControls> {
                       value: 'dense_inspection',
                       child: Text('Dense Inspection'),
                     ),
+                    DropdownMenuItem(
+                      value: 'dimr',
+                      child: Text('DIMR (Dense + Resumption)'),
+                    ),
                   ],
                   onChanged: _isMissionActive
                       ? null
@@ -133,9 +137,15 @@ class _MissionControlsState extends State<MissionControls> {
 
     try {
       setState(() => _isMissionActive = true);
-      await droneService.startMission(mission);
+      // Check if this is a resume (progress > 0 and < 100)
+      final isResume = mission.progressPercentage > 0 && mission.progressPercentage < 100;
+      await droneService.startMission(mission, isResume: isResume);
+      
+      final message = isResume 
+          ? 'Mission resumed from ${mission.progressPercentage}%'
+          : 'Mission started successfully';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mission started successfully')),
+        SnackBar(content: Text(message)),
       );
     } catch (e) {
       setState(() => _isMissionActive = false);

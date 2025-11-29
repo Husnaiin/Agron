@@ -22,6 +22,127 @@ is_mission_active = False
 mission_waypoints = []
 current_waypoint_index = 0
 mission_progress = 0
+mission_type = None  # Track mission type (e.g., 'dimr')
+total_waypoints = 0
+
+# Battery threshold for DIMR missions
+BATTERY_THRESHOLD = 90.0  # Battery percentage threshold for RTL (90%)
+
+# LiPo 6S discharge curve (voltage to percentage mapping)
+# Based on typical LiPo discharge characteristics
+LIPO_DISCHARGE_CURVE = [
+    (25.2, 100),  # Fully charged (4.2V per cell)
+    (24.3, 83),   # Good
+    (23.4, 67),   # OK
+    (22.5, 50),   # Medium
+    (21.6, 33),   # Getting low
+    (20.7, 17),   # Low
+    (19.8, 0),    # Critical (3.3V per cell)
+]
+
+rtl_triggered_by_battery = False
+battery_voltage_mv = 0  # Battery voltage in millivolts
+
+# Persistent message queue for critical events (RTL, mission completion, etc.)
+pending_messages_file = pathlib.Path("/home/agron/pending_messages.json")
+pending_messages_lock = threading.Lock()
+
+
+def _calculate_battery_percentage(voltage_v: float) -> int:
+    """
+    Calculate battery percentage from voltage using LiPo discharge curve.
+    Uses linear interpolation between known voltage points.
+    
+    Args:
+        voltage_v: Battery voltage in volts
+        
+    Returns:
+        Battery percentage (0-100)
+    """
+    # Handle out of range cases
+    if voltage_v >= LIPO_DISCHARGE_CURVE[0][0]:  # >= 25.2V
+        return 100
+    if voltage_v <= LIPO_DISCHARGE_CURVE[-1][0]:  # <= 19.8V
+        return 0
+    
+    # Find the two points to interpolate between
+    for i in range(len(LIPO_DISCHARGE_CURVE) - 1):
+        v_high, pct_high = LIPO_DISCHARGE_CURVE[i]
+        v_low, pct_low = LIPO_DISCHARGE_CURVE[i + 1]
+        
+        if v_low <= voltage_v <= v_high:
+            # Linear interpolation
+            voltage_range = v_high - v_low
+            pct_range = pct_high - pct_low
+            voltage_offset = voltage_v - v_low
+            
+            percentage = pct_low + (voltage_offset / voltage_range) * pct_range
+            return int(round(percentage))
+    
+    # Fallback (shouldn't reach here)
+    return 0
+
+
+def _save_pending_message(message: Dict[str, Any]):
+    """
+    Save a critical message to persistent queue.
+    Used for RTL triggers, mission completion, etc.
+    """
+    with pending_messages_lock:
+        try:
+            # Load existing messages
+            messages = []
+            if pending_messages_file.exists():
+                with open(pending_messages_file, 'r') as f:
+                    messages = json.load(f)
+            
+            # Add timestamp if not present
+            if 'saved_at' not in message:
+                message['saved_at'] = datetime.now().isoformat()
+            
+            # Append new message
+            messages.append(message)
+            
+            # Save back to file
+            with open(pending_messages_file, 'w') as f:
+                json.dump(messages, f, indent=2)
+            
+            print(f"[QUEUE] Saved pending message: {message.get('type')} - {message.get('status')}")
+        except Exception as e:
+            print(f"[QUEUE] Failed to save pending message: {e}")
+
+
+def _load_pending_messages() -> List[Dict[str, Any]]:
+    """
+    Load all pending messages from queue.
+    Returns empty list if no messages or error.
+    """
+    with pending_messages_lock:
+        try:
+            if not pending_messages_file.exists():
+                return []
+            
+            with open(pending_messages_file, 'r') as f:
+                messages = json.load(f)
+            
+            print(f"[QUEUE] Loaded {len(messages)} pending message(s)")
+            return messages
+        except Exception as e:
+            print(f"[QUEUE] Failed to load pending messages: {e}")
+            return []
+
+
+def _clear_pending_messages():
+    """
+    Clear all pending messages after successful delivery.
+    """
+    with pending_messages_lock:
+        try:
+            if pending_messages_file.exists():
+                pending_messages_file.unlink()
+                print("[QUEUE] Cleared pending messages")
+        except Exception as e:
+            print(f"[QUEUE] Failed to clear pending messages: {e}")
 
 # Drone position and telemetry
 drone_latitude = 0.0
@@ -190,6 +311,20 @@ async def websocket_endpoint(websocket: WebSocket):
             "message": "Successfully connected to Agron GCS Server"
         })
         
+        # Send any pending critical messages (RTL, mission status, etc.)
+        pending_messages = _load_pending_messages()
+        if pending_messages:
+            print(f"[QUEUE] Sending {len(pending_messages)} pending message(s) to client")
+            for msg in pending_messages:
+                try:
+                    await websocket.send_json(msg)
+                    print(f"[QUEUE] Sent pending: {msg.get('type')} - {msg.get('status')}")
+                except Exception as e:
+                    print(f"[QUEUE] Failed to send pending message: {e}")
+            
+            # Clear pending messages after successful delivery
+            _clear_pending_messages()
+        
         # Listen for client messages
         while True:
             data = await websocket.receive_text()
@@ -222,6 +357,9 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
         
         if "waypoints" in message:
             mission_waypoints = message["waypoints"]
+            mission_type = message.get("mission_type", None)
+            total_waypoints = len(mission_waypoints)
+            
             if mission_waypoints:
                 first_waypoint = mission_waypoints[0]
                 print(f"First waypoint: {json.dumps(first_waypoint, indent=2)}")
@@ -239,7 +377,18 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 
                 current_waypoint_index = 0
                 mission_progress = 0
+                
+                # Initialize battery threshold checking for DIMR missions
+                global rtl_triggered_by_battery
+                if mission_type == "dimr":
+                    rtl_triggered_by_battery = False
+                    print(f"[MISSION] DIMR mission - Battery threshold monitoring ENABLED ({BATTERY_THRESHOLD}%)")
+                
                 print(f"Starting at position: {drone_latitude}, {drone_longitude}")
+                print(f"[MISSION] Total waypoints: {total_waypoints}")
+        
+        # Clear any pending messages from previous missions
+        _clear_pending_messages()
         
         # Guided takeoff, then AUTO: set GUIDED, arm, take off to 20 m, then AUTO + MISSION_START
         if mavutil is not None:
@@ -291,6 +440,10 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
         is_mission_active = False
         mission_progress = 0
         current_waypoint_index = 0
+        
+        # Clear any pending RTL messages (manual stop)
+        _clear_pending_messages()
+        
         # Trigger RTL on the autopilot
         if mavutil is not None:
             with mavlink_lock:
@@ -351,7 +504,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
         await broadcast_message({"type": "camera_status", "status": "capture_stopped"})
 
     elif msg_type == "upload_mission":
-        # Expected payload: { "type": "upload_mission", "waypoints": [ {"latitude": .., "longitude": ..}, ... ] }
+        # Expected payload: { "type": "upload_mission", "waypoints": [ {"latitude": .., "longitude": ..}, ... ], "mission_type": "dimr" }
         if mavutil is None:
             await websocket.send_json({"type": "mission_status", "status": "error", "message": "pymavlink not installed"})
             return
@@ -365,6 +518,11 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
         if not isinstance(raw_wps, list) or len(raw_wps) == 0:
             await websocket.send_json({"type": "mission_status", "status": "error", "message": "no waypoints provided"})
             return
+        
+        # Store mission type for later use
+        global mission_type
+        mission_type = message.get("mission_type", None)
+        print(f"[MISSION] Mission type: {mission_type}")
 
         # Build mission items: TAKEOFF (20m) -> WAYPOINTS (20m) -> RTL
         print(f"[MISSION] upload_mission received with {len(raw_wps)} waypoints")
@@ -1030,10 +1188,21 @@ def _mavlink_reader_loop():
 
                 elif t == "SYS_STATUS":
                     try:
-                        br = getattr(msg, "battery_remaining", -1)
-                        if br is not None and br >= 0:
-                            drone_battery = int(br)
-                    except Exception:
+                        # Read battery voltage in millivolts
+                        voltage_mv = getattr(msg, "voltage_battery", None)
+                        if voltage_mv is not None and voltage_mv > 0:
+                            global battery_voltage_mv
+                            battery_voltage_mv = voltage_mv
+                            
+                            # Convert voltage to percentage using LiPo discharge curve
+                            voltage_v = voltage_mv / 1000.0  # Convert millivolts to volts
+                            drone_battery = _calculate_battery_percentage(voltage_v)
+                            
+                            # Debug log when voltage is getting low
+                            if voltage_v < 22.0:  # Log if voltage is medium or below
+                                print(f"[BATTERY] Voltage: {voltage_v:.2f}V → {drone_battery}%")
+                    except Exception as e:
+                        print(f"[BATTERY] Error calculating battery: {e}")
                         pass
 
                 elif t == "GPS_RAW_INT":
@@ -1077,13 +1246,20 @@ def _mavlink_reader_loop():
 
 async def generate_telemetry():
     """Broadcast telemetry data as received from Pixhawk (no simulation)."""
-    global mission_progress, is_mission_active
+    global mission_progress, is_mission_active, rtl_triggered_by_battery, current_waypoint_index, total_waypoints
 
     while True:
         # Use last known good coordinates if current are zero/empty
         lat_out = drone_latitude if drone_latitude not in (None, 0.0) else last_good_latitude
         lon_out = drone_longitude if drone_longitude not in (None, 0.0) else last_good_longitude
 
+        # Calculate mission progress based on waypoints
+        if is_mission_active and total_waypoints > 0:
+            mission_progress = int((current_waypoint_index / total_waypoints) * 100)
+        
+        # Calculate battery voltage for telemetry
+        battery_voltage_v = battery_voltage_mv / 1000.0 if battery_voltage_mv > 0 else 0.0
+        
         telemetry = {
             "type": "telemetry",
             "latitude": lat_out,
@@ -1092,13 +1268,67 @@ async def generate_telemetry():
             "speed": drone_speed,
             "heading": drone_heading,
             "batteryPercentage": int(drone_battery) if isinstance(drone_battery, (int, float)) else None,
+            "batteryVoltage": round(battery_voltage_v, 2),
             "sprayLevel": int(drone_spray),
             "missionProgress": int(mission_progress),
+            "currentWaypointIndex": current_waypoint_index,
+            "totalWaypoints": total_waypoints,
             "timestamp": datetime.now().isoformat()
         }
 
+        # Battery threshold monitoring for DIMR missions
+        if is_mission_active and mission_type == 'dimr' and not rtl_triggered_by_battery:
+            try:
+                battery_level = float(drone_battery) if drone_battery is not None else 100.0
+                battery_v = battery_voltage_mv / 1000.0 if battery_voltage_mv > 0 else 0.0
+                
+                if battery_level < BATTERY_THRESHOLD:
+                    print(f"[MISSION] Battery {battery_level}% ({battery_v:.2f}V) < threshold {BATTERY_THRESHOLD}% - triggering RTL")
+                    rtl_triggered_by_battery = True
+                    
+                    # Trigger RTL on autopilot
+                    if mavutil is not None:
+                        with mavlink_lock:
+                            m = globals().get("mavlink_master")
+                        if m:
+                            try:
+                                print("[MISSION] Setting RTL mode due to low battery")
+                                m.set_mode_apm('RTL')
+                            except Exception:
+                                try:
+                                    m.mav.command_long_send(
+                                        m.target_system,
+                                        m.target_component or mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1,
+                                        mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
+                                        0, 0, 0, 0, 0, 0, 0, 0,
+                                    )
+                                except Exception:
+                                    pass
+                    
+                    is_mission_active = False
+                    
+                    # Create critical RTL message
+                    rtl_message = {
+                        "type": "mission_status",
+                        "status": "rtl_battery_low",
+                        "battery": battery_level,
+                        "batteryVoltage": round(battery_v, 2),
+                        "currentWaypointIndex": current_waypoint_index,
+                        "totalWaypoints": total_waypoints,
+                        "progressPercentage": mission_progress,
+                        "message": f"RTL triggered: Battery at {battery_level}% ({battery_v:.2f}V)"
+                    }
+                    
+                    # Save to persistent queue (in case connection drops)
+                    _save_pending_message(rtl_message)
+                    
+                    # Broadcast to currently connected clients
+                    await broadcast_message(rtl_message)
+            except Exception as e:
+                print(f"[MISSION] Battery check error: {e}")
+
         if is_mission_active:
-            print(f"telem: {telemetry}")
+            print(f"telem: lat={lat_out}, lon={lon_out}, batt={drone_battery}% ({battery_voltage_v:.2f}V), progress={mission_progress}%, wp={current_waypoint_index}/{total_waypoints}")
         await broadcast_message(telemetry)
 
         await asyncio.sleep(1)
@@ -1121,3 +1351,14 @@ def status():
 #sudo systemctl stop gcs-server
 #sudo systemctl restart gcs-server
 #sudo systemctl status gcs-server --no-pager
+
+# Battery percentage calculation verification:
+# Test: _calculate_battery_percentage(25.2) → 100%
+# Test: _calculate_battery_percentage(24.3) → 83%
+# Test: _calculate_battery_percentage(23.4) → 67%
+# Test: _calculate_battery_percentage(22.5) → 50%
+# Test: _calculate_battery_percentage(21.6) → 33%
+# Test: _calculate_battery_percentage(20.7) → 17%
+# Test: _calculate_battery_percentage(19.8) → 0%
+# Test: _calculate_battery_percentage(19.0) → 0% (below minimum)
+# Test: _calculate_battery_percentage(26.0) → 100% (above maximum)

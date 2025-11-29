@@ -56,6 +56,8 @@ class Mission {
   final bool isScheduled; // NEW: Is this mission scheduled?
   final bool reminderEnabled; // NEW: Enable reminder notifications
   MissionStatus status;
+  final int progressPercentage; // Mission progress (0-100)
+  final int lastCompletedWaypointIndex; // Last completed waypoint index
 
   Mission({
     required this.id,
@@ -70,6 +72,8 @@ class Mission {
     this.isScheduled = false,
     this.reminderEnabled = false,
     this.status = MissionStatus.pending,
+    this.progressPercentage = 0,
+    this.lastCompletedWaypointIndex = -1,
   });
 
   Map<String, dynamic> toJson() => {
@@ -85,6 +89,8 @@ class Mission {
         'isScheduled': isScheduled,
         'reminderEnabled': reminderEnabled,
         'status': status.toString().split('.').last,
+        'progressPercentage': progressPercentage,
+        'lastCompletedWaypointIndex': lastCompletedWaypointIndex,
       };
 
   factory Mission.fromJson(Map<String, dynamic> json) => Mission(
@@ -109,6 +115,8 @@ class Mission {
           (e) => e.toString().split('.').last == json['status'],
           orElse: () => MissionStatus.pending,
         ),
+        progressPercentage: json['progressPercentage'] as int? ?? 0,
+        lastCompletedWaypointIndex: json['lastCompletedWaypointIndex'] as int? ?? -1,
       );
 
   // Helper method to copy mission with updates
@@ -119,6 +127,8 @@ class Mission {
     bool? reminderEnabled,
     MissionStatus? status,
     DateTime? completedAt,
+    int? progressPercentage,
+    int? lastCompletedWaypointIndex,
   }) {
     return Mission(
       id: id,
@@ -133,6 +143,8 @@ class Mission {
       isScheduled: isScheduled ?? this.isScheduled,
       reminderEnabled: reminderEnabled ?? this.reminderEnabled,
       status: status ?? this.status,
+      progressPercentage: progressPercentage ?? this.progressPercentage,
+      lastCompletedWaypointIndex: lastCompletedWaypointIndex ?? this.lastCompletedWaypointIndex,
     );
   }
 }

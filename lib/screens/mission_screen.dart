@@ -165,7 +165,25 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
             Text('Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}'),
             if (mission.completedAt != null)
               Text('Completed: ${DateFormat.yMMMd().add_jm().format(mission.completedAt!)}'),
-            Text('Status: ${mission.status.toString().split('.').last}'),
+            Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    'Status: ${mission.status.toString().split('.').last}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '${mission.progressPercentage}%', 
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: mission.progressPercentage >= 100 ? Colors.green : Colors.orange,
+                  ),
+                ),
+              ],
+            ),
             Text('Area: ${acres.toStringAsFixed(2)} acres'),
             Text('Waypoints: ${mission.waypoints.length}'),
           ],
@@ -181,11 +199,18 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
               onPressed: () => _scheduleMission(mission),
               tooltip: mission.isScheduled ? 'Edit Schedule' : 'Schedule Mission',
             ),
-            IconButton(
-              icon: const Icon(Icons.play_arrow),
-              onPressed: () => _startMission(mission),
-              tooltip: 'Start Mission',
-            ),
+            if (mission.progressPercentage > 0 && mission.progressPercentage < 100)
+              IconButton(
+                icon: const Icon(Icons.play_circle_outline, color: Colors.green),
+                onPressed: () => _resumeMission(mission),
+                tooltip: 'Resume Mission (${mission.progressPercentage}%)',
+              )
+            else
+              IconButton(
+                icon: const Icon(Icons.play_arrow),
+                onPressed: () => _startMission(mission, isResume: false),
+                tooltip: 'Start Mission',
+              ),
             IconButton(
               icon: const Icon(Icons.delete),
               onPressed: () => _deleteMission(mission),
@@ -353,10 +378,41 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
     return area;
   }
 
-  void _startMission(Mission mission) {
+  void _startMission(Mission mission, {bool isResume = false}) {
     final droneService = context.read<DroneService>();
     droneService.setMission(mission, fromHistory: true);
     Navigator.pushReplacementNamed(context, '/home');
+  }
+  
+  void _resumeMission(Mission mission) {
+    final droneService = context.read<DroneService>();
+    droneService.setMission(mission, fromHistory: true);
+    
+    // Show resume confirmation dialog
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Resume Mission'),
+        content: Text(
+          'Resume mission "${mission.name}" from ${mission.progressPercentage}% completion?\n\n'
+          'Waypoint ${mission.lastCompletedWaypointIndex + 1} of ${mission.waypoints.length}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pushReplacementNamed(context, '/home');
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            child: const Text('Resume'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showMissionInfo(BuildContext context, Mission mission) {
