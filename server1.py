@@ -349,6 +349,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
     global is_mission_active, mission_waypoints, current_waypoint_index, mission_progress
     global drone_latitude, drone_longitude
     global capture_task, capture_stop_event
+    global mission_type, total_waypoints, rtl_triggered_by_battery, capture_frame_counter, capture_session_counter
     
     msg_type = message.get("type")
     
@@ -379,7 +380,6 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 mission_progress = 0
                 
                 # Initialize battery threshold checking for DIMR missions
-                global rtl_triggered_by_battery
                 if mission_type == "dimr":
                     rtl_triggered_by_battery = False
                     print(f"[MISSION] DIMR mission - Battery threshold monitoring ENABLED ({BATTERY_THRESHOLD}%)")
@@ -483,7 +483,6 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
         if capture_task and not capture_task.done():
             print("[CAMERA] Capture already running")
         else:
-            global capture_frame_counter, capture_session_counter
             capture_frame_counter = 0
             capture_session_counter = (capture_session_counter or 0) + 1
             capture_stop_event = asyncio.Event()
@@ -520,7 +519,6 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
             return
         
         # Store mission type for later use
-        global mission_type
         mission_type = message.get("mission_type", None)
         print(f"[MISSION] Mission type: {mission_type}")
 
@@ -1069,6 +1067,7 @@ def _cmd_name(cmd_id: int) -> str:
 def _mavlink_reader_loop():
     global drone_latitude, drone_longitude, drone_altitude
     global drone_speed, drone_heading, drone_battery
+    global current_waypoint_index, total_waypoints, is_mission_active
 
     if mavutil is None:
         print("pymavlink not installed; telemetry will remain static")
@@ -1091,6 +1090,7 @@ def _mavlink_reader_loop():
                 (mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS, 1),
                 (mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 10),
                 (mavutil.mavlink.MAVLINK_MSG_ID_GPS_RAW_INT, 2),
+                (mavutil.mavlink.MAVLINK_MSG_ID_MISSION_CURRENT, 2),  # Track mission progress
             ]:
                 _request_message_interval(m, msg_id, hz, autopilot_comp)
 
@@ -1220,6 +1220,18 @@ def _mavlink_reader_loop():
                                     drone_longitude = lon
                     except Exception:
                         pass
+
+                elif t == "MISSION_CURRENT":
+                    # Update current waypoint index for mission progress tracking
+                    try:
+                        if is_mission_active and hasattr(msg, 'seq'):
+                            new_index = msg.seq
+                            # Only update if it's a valid waypoint (not 0 which is typically HOME/takeoff)
+                            if new_index > 0 and new_index <= total_waypoints:
+                                current_waypoint_index = new_index
+                                print(f"[MISSION] Current waypoint: {current_waypoint_index}/{total_waypoints}")
+                    except Exception as e:
+                        print(f"[MISSION] Error reading MISSION_CURRENT: {e}")
 
                 elif t == "HOME_POSITION":
                     try:
