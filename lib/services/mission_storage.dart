@@ -20,30 +20,32 @@ class MissionStorage {
   Future<void> _saveToLocal(Mission mission) async {
     final prefs = await SharedPreferences.getInstance();
     final missions = await _getLocalMissions();
-    
+
     // Update or add mission
     missions.removeWhere((m) => m.id == mission.id);
     missions.add(mission);
-    
+
     // Save to local storage
     final jsonList = missions.map((m) => m.toJson()).toList();
     await prefs.setString(_localMissionsKey, json.encode(jsonList));
   }
-  
+
   /// Get missions from local cache
   Future<List<Mission>> _getLocalMissions() async {
     final prefs = await SharedPreferences.getInstance();
     final jsonString = prefs.getString(_localMissionsKey);
     if (jsonString == null) return [];
-    
+
     final List<dynamic> jsonList = json.decode(jsonString);
-    return jsonList.map((j) => Mission.fromJson(j as Map<String, dynamic>)).toList();
+    return jsonList
+        .map((j) => Mission.fromJson(j as Map<String, dynamic>))
+        .toList();
   }
-  
+
   /// Sync to Firebase (when online)
   Future<void> _syncToFirebase(Mission mission) async {
     if (_uid == null) return;
-    
+
     try {
       await _firestore
           .collection(_usersCollection)
@@ -55,11 +57,11 @@ class MissionStorage {
       print('[STORAGE] Firebase sync failed: $e (will retry when online)');
     }
   }
-  
+
   Future<void> saveMission(Mission mission) async {
     // Always save to local cache first
     await _saveToLocal(mission);
-    
+
     // Try to sync to Firebase (may fail if offline)
     await _syncToFirebase(mission);
 
@@ -72,7 +74,7 @@ class MissionStorage {
   Future<List<Mission>> getMissions() async {
     // Always return from local cache (works offline)
     final localMissions = await _getLocalMissions();
-    
+
     // Try to fetch from Firebase and update cache (if online)
     if (_uid != null) {
       try {
@@ -81,10 +83,11 @@ class MissionStorage {
             .doc(_uid)
             .collection(_missionsCollection)
             .get();
-        
+
         if (snapshot.docs.isNotEmpty) {
-          final firebaseMissions = snapshot.docs.map((doc) => Mission.fromJson(doc.data())).toList();
-          
+          final firebaseMissions =
+              snapshot.docs.map((doc) => Mission.fromJson(doc.data())).toList();
+
           // Merge with local missions (local takes precedence for progress updates)
           final mergedMap = <String, Mission>{};
           for (var m in firebaseMissions) {
@@ -101,45 +104,58 @@ class MissionStorage {
               mergedMap[m.id] = m;
             }
           }
-          
+
           // Update local cache with merged data
           final prefs = await SharedPreferences.getInstance();
           final jsonList = mergedMap.values.map((m) => m.toJson()).toList();
           await prefs.setString(_localMissionsKey, json.encode(jsonList));
-          
+
           return mergedMap.values.toList();
         }
       } catch (e) {
         print('[STORAGE] Firebase fetch failed: $e (using local cache)');
       }
     }
-    
+
     return localMissions;
   }
 
   Future<List<Mission>> getScheduledMissions() async {
-    if (_uid == null) throw Exception('User not logged in');
-    final snapshot = await _firestore
-        .collection(_usersCollection)
-        .doc(_uid)
-        .collection(_missionsCollection)
-        .where('isScheduled', isEqualTo: true)
-        .get();
-    return snapshot.docs.map((doc) => Mission.fromJson(doc.data())).toList();
+    if (_uid == null) {
+      // No Firebase user; just return empty scheduled list instead of crashing
+      return [];
+    }
+    try {
+      final snapshot = await _firestore
+          .collection(_usersCollection)
+          .doc(_uid)
+          .collection(_missionsCollection)
+          .where('isScheduled', isEqualTo: true)
+          .get();
+      return snapshot.docs.map((doc) => Mission.fromJson(doc.data())).toList();
+    } on FirebaseException catch (e) {
+      // Avoid crashing app on Firestore permission / connectivity problems
+      print(
+          '[STORAGE] getScheduledMissions failed: ${e.code} ${e.message} (returning empty list)');
+      return [];
+    } catch (e) {
+      print('[STORAGE] getScheduledMissions failed: $e (returning empty list)');
+      return [];
+    }
   }
 
   Future<void> deleteMission(String id) async {
     // Cancel notification before deleting
     await _notificationService.cancelMissionReminder(id);
-    
+
     // Delete from local cache
     final missions = await _getLocalMissions();
     missions.removeWhere((m) => m.id == id);
-    
+
     final prefs = await SharedPreferences.getInstance();
     final jsonList = missions.map((m) => m.toJson()).toList();
     await prefs.setString(_localMissionsKey, json.encode(jsonList));
-    
+
     // Delete from Firebase (if online)
     if (_uid != null) {
       try {
@@ -156,19 +172,19 @@ class MissionStorage {
   }
 
   Future<void> updateMissionSchedule(
-    String id, 
-    DateTime? scheduledAt, 
+    String id,
+    DateTime? scheduledAt,
     bool isScheduled,
     bool reminderEnabled,
   ) async {
     if (_uid == null) throw Exception('User not logged in');
-    
+
     final docRef = _firestore
         .collection(_usersCollection)
         .doc(_uid)
         .collection(_missionsCollection)
         .doc(id);
-    
+
     await docRef.update({
       'scheduledAt': scheduledAt?.toIso8601String(),
       'isScheduled': isScheduled,
@@ -195,23 +211,26 @@ class MissionStorage {
         status: completed ? MissionStatus.completed : MissionStatus.inProgress,
       );
       missions[index] = updatedMission;
-      
+
       final prefs = await SharedPreferences.getInstance();
       final jsonList = missions.map((m) => m.toJson()).toList();
       await prefs.setString(_localMissionsKey, json.encode(jsonList));
-      
+
       // Sync to Firebase
       await _syncToFirebase(updatedMission);
     }
   }
-  
+
   /// Update mission progress (waypoint completion)
-  Future<void> updateMissionProgress(String id, int progressPercentage, int lastCompletedWaypointIndex) async {
+  Future<void> updateMissionProgress(
+      String id, int progressPercentage, int lastCompletedWaypointIndex) async {
     // Update in local cache
     final missions = await _getLocalMissions();
     final index = missions.indexWhere((m) => m.id == id);
     if (index != -1) {
-      final status = progressPercentage >= 100 ? MissionStatus.completed : MissionStatus.inProgress;
+      final status = progressPercentage >= 100
+          ? MissionStatus.completed
+          : MissionStatus.inProgress;
       final updatedMission = missions[index].copyWith(
         progressPercentage: progressPercentage,
         lastCompletedWaypointIndex: lastCompletedWaypointIndex,
@@ -219,27 +238,48 @@ class MissionStorage {
         completedAt: progressPercentage >= 100 ? DateTime.now() : null,
       );
       missions[index] = updatedMission;
-      
+
       final prefs = await SharedPreferences.getInstance();
       final jsonList = missions.map((m) => m.toJson()).toList();
       await prefs.setString(_localMissionsKey, json.encode(jsonList));
-      
+
       // Sync to Firebase
       await _syncToFirebase(updatedMission);
     }
   }
 
   Future<void> createUserProfile(String email) async {
-    if (_uid == null) throw Exception('User not logged in');
-    await _firestore.collection(_usersCollection).doc(_uid).set({
-      'email': email,
-      'createdAt': DateTime.now().toIso8601String(),
-    }, SetOptions(merge: true));
+    if (_uid == null) {
+      print('[STORAGE] Cannot create user profile: not logged in');
+      return;
+    }
+    try {
+      await _firestore.collection(_usersCollection).doc(_uid).set({
+        'email': email,
+        'createdAt': DateTime.now().toIso8601String(),
+      }, SetOptions(merge: true));
+    } on FirebaseException catch (e) {
+      print('[STORAGE] createUserProfile failed: ${e.code} ${e.message}');
+      // Don't throw - allow app to continue
+    } catch (e) {
+      print('[STORAGE] createUserProfile failed: $e');
+      // Don't throw - allow app to continue
+    }
   }
 
   Future<Map<String, dynamic>?> getUserProfile() async {
-    if (_uid == null) throw Exception('User not logged in');
-    final doc = await _firestore.collection(_usersCollection).doc(_uid).get();
-    return doc.exists ? doc.data() : null;
+    if (_uid == null) return null;
+    try {
+      final doc = await _firestore.collection(_usersCollection).doc(_uid).get();
+      return doc.exists ? doc.data() : null;
+    } on FirebaseException catch (e) {
+      // Avoid crashing on Firestore permission / connectivity problems
+      print(
+          '[STORAGE] getUserProfile failed: ${e.code} ${e.message} (returning null)');
+      return null;
+    } catch (e) {
+      print('[STORAGE] getUserProfile failed: $e (returning null)');
+      return null;
+    }
   }
 }

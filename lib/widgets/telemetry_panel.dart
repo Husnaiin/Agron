@@ -21,18 +21,17 @@ class TelemetryPanel extends StatelessWidget {
         final targetSpeed = droneServiceState.targetSpeed;
         final targetAltitude = droneServiceState.targetAltitude;
         final isMissionActive = droneServiceState.isMissionActive;
+         final isConnected = droneServiceState.isConnected;
 
-        // During mission: show actual telemetry values; otherwise show target/default
-        final displaySpeed = isMissionActive && telemetry != null
+        // Show ONLY actual drone values here. If not connected or no telemetry yet,
+        // show placeholders ("--") instead of default/target values to avoid confusion.
+        final hasTelemetry = isConnected && telemetry != null;
+        final displaySpeed = hasTelemetry
             ? '${telemetry.speed.toStringAsFixed(1)} m/s'
-            : (targetSpeed != null
-                ? '${targetSpeed.toStringAsFixed(1)} m/s'
-                : '5.0 m/s');
-        final displayAltitude = isMissionActive && telemetry != null
+            : '--';
+        final displayAltitude = hasTelemetry
             ? '${telemetry.altitude.toStringAsFixed(1)} m'
-            : (targetAltitude != null
-                ? '${targetAltitude.toStringAsFixed(1)} m'
-                : '20.0 m');
+            : '--';
 
         return Container(
           padding: const EdgeInsets.all(16),

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'dart:ui' as ui;
 // import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
-// import 'package:geolocator/geolocator.dart';
+import 'package:geolocator/geolocator.dart';
 // import 'package:flutter_svg/flutter_svg.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -71,6 +71,8 @@ class _MapViewState extends State<MapView> {
   late DroneService _droneService;
   final MissionStorage _missionStorage = MissionStorage();
   bool _wasMissionActive = false;
+  bool _hasCenteredOnDrone = false;
+  String? _lastFittedMissionId;
 
   // Default mission parameters
   static const double defaultAltitude = 30.0; // meters
@@ -89,7 +91,6 @@ class _MapViewState extends State<MapView> {
   CustomTileProvider? _satelliteTileProvider;
   StreamSubscription<Telemetry>? _telemetrySubscription;
   Timer? _connectionTimer;
-  bool _isCapturing = false;
 
   // Dense inspection preview
   final List<LatLng> _densePathPoints = [];
@@ -283,7 +284,7 @@ class _MapViewState extends State<MapView> {
         reverse = !reverse; // alternate direction for boustrophedon
       }
     }
-    
+
     // Remove consecutive duplicate points
     if (result.length > 1) {
       final deduped = <LatLng>[result.first];
@@ -299,7 +300,7 @@ class _MapViewState extends State<MapView> {
       result.clear();
       result.addAll(deduped);
     }
-    
+
     // If a start point is provided, reorder to nearest entry and add start/return
     if (startPoint != null && result.isNotEmpty) {
       int nearestIdx = 0;
@@ -337,13 +338,115 @@ class _MapViewState extends State<MapView> {
 
   void _onServiceChange() {
     final isActive = _droneService.isMissionActive;
+    final currentMission = _droneService.currentMission;
+
+    // Reset fitted mission ID if mission is cleared, so it can refit when reloaded
+    if (currentMission == null) {
+      _lastFittedMissionId = null;
+    }
+
     if (_wasMissionActive && !isActive) {
       setState(() {
         _droneLocation = null; // remove airplane icon
         _points.clear(); // clear any drawn points
+        _hasCenteredOnDrone = false;
       });
     }
     _wasMissionActive = isActive;
+  }
+
+  /// Clear the current mission and reset the map to a clean state.
+  /// This allows the user to start drawing a new mission from scratch.
+  void _clearMission() {
+    // Clear the mission from DroneService
+    _droneService.clearMission();
+
+    setState(() {
+      // Clear all drawn points
+      _points.clear();
+
+      // Clear dense path points
+      _densePathPoints.clear();
+
+      // Reset fitted mission ID so new missions can be fitted
+      _lastFittedMissionId = null;
+
+      // Stop drawing mode
+      _isDrawing = false;
+
+      // Reset map to default view (center on current location if available)
+      if (_currentLocation != null) {
+        _mapController.move(
+            _currentLocation!, 18); // Increased zoom for maximum detail
+      } else if (_droneLocation != null) {
+        _mapController.move(
+            _droneLocation!, 18); // Increased zoom for maximum detail
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Mission cleared. You can now draw a new mission.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Fit the map camera to show all mission waypoints with MAXIMUM ZOOM.
+  /// For small mission areas, this zooms in as much as possible to make the area
+  /// appear larger on screen, while ensuring it stays within screen bounds.
+  void _fitMapToBounds(List<LatLng> points) {
+    if (points.isEmpty) return;
+
+    // Compute bounding box from all points
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLon = points.first.longitude;
+    double maxLon = points.first.longitude;
+
+    for (final point in points) {
+      if (point.latitude < minLat) minLat = point.latitude;
+      if (point.latitude > maxLat) maxLat = point.latitude;
+      if (point.longitude < minLon) minLon = point.longitude;
+      if (point.longitude > maxLon) maxLon = point.longitude;
+    }
+
+    // Calculate the span of the mission area
+    final latSpan = maxLat - minLat;
+    final lonSpan = maxLon - minLon;
+
+    // For very small areas, use MINIMAL padding to MAXIMIZE ZOOM
+    // This makes small mission areas appear as large as possible on screen
+    final double padding;
+    if (latSpan < 0.0005 || lonSpan < 0.0005) {
+      // Extremely small area (< ~50m): absolute minimum padding to maximize zoom
+      padding = 10.0;
+    } else if (latSpan < 0.001 || lonSpan < 0.001) {
+      // Very small area (< ~100m): minimal padding to maximize zoom
+      padding = 15.0;
+    } else if (latSpan < 0.01 || lonSpan < 0.01) {
+      // Small area (< ~1km): moderate padding
+      padding = 30.0;
+    } else {
+      // Larger area: comfortable padding
+      padding = 50.0;
+    }
+
+    // Create bounds from computed bounding box
+    final bounds = LatLngBounds(
+      LatLng(minLat, minLon),
+      LatLng(maxLat, maxLon),
+    );
+
+    // Fit the map to these bounds with minimal padding for small areas
+    // This maximizes zoom level while keeping polygon within screen bounds
+    _mapController.fitBounds(
+      bounds,
+      options: FitBoundsOptions(
+        padding: EdgeInsets.all(padding),
+        maxZoom: 19, // Maximum zoom level allowed
+      ),
+    );
   }
 
   void _setupTelemetrySubscription() {
@@ -352,6 +455,18 @@ class _MapViewState extends State<MapView> {
       setState(() {
         _lastTelemetry = telemetry;
         _droneLocation = LatLng(telemetry.latitude, telemetry.longitude);
+        // On first telemetry after (re)connect, center map on the *current* drone location
+        if (!_hasCenteredOnDrone || _currentLocation == null) {
+          _currentLocation = _droneLocation;
+          // Only auto-center on the drone when there is NO active mission loaded.
+          // If a mission is loaded/resumed, we keep the map zoom fitted to the mission area.
+          if (_currentLocation != null &&
+              _droneService.currentMission == null) {
+            _mapController.move(
+                _currentLocation!, 18); // Increased zoom for maximum detail
+          }
+          _hasCenteredOnDrone = true;
+        }
       });
     });
   }
@@ -389,15 +504,56 @@ class _MapViewState extends State<MapView> {
 
   Future<void> _requestLocationPermission() async {
     final status = await Permission.location.request();
-    // We don't need mobile GPS for centering anymore; center from drone/cache
     if (status.isGranted) {
-      _loadLastDroneLocationFromCache();
+      await _initMobileLocation();
+    } else {
+      // Fallback: try to center from last known drone location (if any)
+      await _loadLastDroneLocationFromCache();
     }
   }
 
   Future<void> _getCurrentLocation() async {
-    // No-op: keep for UI button compatibility; prefer drone position
-    await _loadLastDroneLocationFromCache();
+    await _initMobileLocation();
+  }
+
+  Future<void> _initMobileLocation() async {
+    try {
+      // Ensure location services are enabled
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        debugPrint('Location services are disabled.');
+        await _loadLastDroneLocationFromCache();
+        return;
+      }
+
+      // Check permission (Permission.location from permission_handler is already granted here)
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied ||
+            permission == LocationPermission.deniedForever) {
+          debugPrint('Geolocator permission denied.');
+          await _loadLastDroneLocationFromCache();
+          return;
+        }
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      if (!mounted) return;
+      setState(() {
+        _currentLocation = LatLng(position.latitude, position.longitude);
+        // If we are not yet tracking a live drone, center map on mobile location
+        if (_droneLocation == null && _currentLocation != null) {
+          _mapController.move(
+              _currentLocation!, 18); // Increased zoom for maximum detail
+        }
+      });
+    } catch (e) {
+      debugPrint('Failed to get mobile location: $e');
+      await _loadLastDroneLocationFromCache();
+    }
   }
 
   Future<void> _loadLastDroneLocationFromCache() async {
@@ -409,7 +565,8 @@ class _MapViewState extends State<MapView> {
         setState(() {
           _droneLocation = LatLng(lat, lon);
           _currentLocation = _droneLocation;
-          _mapController.move(_droneLocation!, 15);
+          _mapController.move(
+              _droneLocation!, 18); // Increased zoom for maximum detail
         });
       }
     } catch (e) {
@@ -462,23 +619,24 @@ class _MapViewState extends State<MapView> {
 
     // Determine mission type
     final missionType = _droneService.selectedMissionType;
-    
+
     // For dense missions: use the generated dense path waypoints
     // For other missions: use user-drawn polygon points
     List<LatLng> waypointsToSave;
-    
-    if ((missionType == 'dense_inspection' || missionType == 'dimr') && 
+
+    if ((missionType == 'dense_inspection' || missionType == 'dimr') &&
         _densePathPoints.isNotEmpty) {
       // Use the pre-generated dense path (what's shown in preview)
       waypointsToSave = List<LatLng>.from(_densePathPoints);
-      debugPrint('[SAVE_MISSION] Saving dense mission with ${waypointsToSave.length} pre-generated waypoints');
+      debugPrint(
+          '[SAVE_MISSION] Saving dense mission with ${waypointsToSave.length} pre-generated waypoints');
     } else {
       // Build waypoint list: first = current drone location, then user-selected points
       waypointsToSave = [];
       if (_droneLocation != null) {
         waypointsToSave.add(_droneLocation!);
       }
-      
+
       // Avoid immediate duplicate if user first point equals last added point
       bool isSamePoint(LatLng a, LatLng b) {
         const double epsilon = 1e-6;
@@ -491,7 +649,8 @@ class _MapViewState extends State<MapView> {
           waypointsToSave.add(p);
         }
       }
-      debugPrint('[SAVE_MISSION] Saving $missionType mission with ${waypointsToSave.length} user waypoints');
+      debugPrint(
+          '[SAVE_MISSION] Saving $missionType mission with ${waypointsToSave.length} user waypoints');
     }
 
     final mission = Mission(
@@ -533,15 +692,36 @@ class _MapViewState extends State<MapView> {
     // Listen to service to rebuild UI on state changes
     final service = Provider.of<DroneService>(context);
     final isMissionActive = service.isMissionActive;
+    // Decide where to show the drone icon:
+    // - If connected: actual drone location from telemetry
+    // - If not connected: show drone icon at current mobile location (if known)
+    LatLng? droneMarkerLocation = _droneLocation;
+    if (!service.isConnected && _currentLocation != null) {
+      droneMarkerLocation = _currentLocation;
+    }
     final missionPoints = service.currentMission != null
         ? service.currentMission!.waypoints.map((w) => w.position).toList()
         : _points;
     final hullPoints = missionPoints.isNotEmpty
         ? _computeConvexHull(missionPoints)
         : <LatLng>[];
+
+    // When a mission is loaded (from history or resume), automatically zoom the map
+    // so that the entire mission area fits nicely on screen with padding.
+    // Use ALL waypoints (not just convex hull) to ensure dense inspection paths are fully visible.
+    if (service.currentMission != null && missionPoints.isNotEmpty) {
+      final currentId = service.currentMission!.id;
+      if (_lastFittedMissionId != currentId) {
+        _lastFittedMissionId = currentId;
+        // Use postFrameCallback to ensure map is fully rendered before fitting
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _fitMapToBounds(missionPoints);
+        });
+      }
+    }
     // While drawing, include drone location as the first point in the hull preview
     final List<LatLng> drawingBasePoints = [];
-    if (_droneLocation != null) drawingBasePoints.add(_droneLocation!);
+    if (droneMarkerLocation != null) drawingBasePoints.add(droneMarkerLocation);
     drawingBasePoints.addAll(_points);
     final drawingHullPoints = drawingBasePoints.isNotEmpty
         ? _computeConvexHull(drawingBasePoints)
@@ -553,7 +733,7 @@ class _MapViewState extends State<MapView> {
           mapController: _mapController,
           options: MapOptions(
             center: _currentLocation ?? const LatLng(0, 0),
-            zoom: 15,
+            zoom: 18, // Increased default zoom for maximum detail
             onTap: _isDrawing ? _handleMapTap : null,
           ),
           children: [
@@ -566,11 +746,11 @@ class _MapViewState extends State<MapView> {
                   _isSatelliteView ? _satelliteTileProvider! : _tileProvider!,
               maxZoom: 19,
             ),
-            if (_droneLocation != null)
+            if (droneMarkerLocation != null)
               MarkerLayer(
                 markers: [
                   Marker(
-                    point: _droneLocation!,
+                    point: droneMarkerLocation,
                     width: 48,
                     height: 48,
                     child: _QuadcopterMarker(
@@ -616,7 +796,7 @@ class _MapViewState extends State<MapView> {
                     ..clear()
                     ..addAll(_generateDenseInspectionPath(
                         drawingHullPoints, pathAlt,
-                        startPoint: _droneLocation, returnToStart: true));
+                        startPoint: droneMarkerLocation, returnToStart: true));
                   return PolylineLayer(
                     polylines: [
                       Polyline(
@@ -680,7 +860,8 @@ class _MapViewState extends State<MapView> {
                   ),
                 ],
               ),
-              if (service.selectedMissionType == 'dense_inspection' || service.selectedMissionType == 'dimr') ...[
+              if (service.selectedMissionType == 'dense_inspection' ||
+                  service.selectedMissionType == 'dimr') ...[
                 // Show dense path preview derived from stored user points
                 Builder(builder: (context) {
                   final targetAlt =
@@ -692,7 +873,7 @@ class _MapViewState extends State<MapView> {
                   _densePathPoints
                     ..clear()
                     ..addAll(_generateDenseInspectionPath(hullPoints, pathAlt,
-                        startPoint: _droneLocation, returnToStart: true));
+                        startPoint: droneMarkerLocation, returnToStart: true));
                   return PolylineLayer(
                     polylines: [
                       Polyline(
@@ -785,12 +966,28 @@ class _MapViewState extends State<MapView> {
                             _droneService.currentMission != null)
                         ? () => _saveMission()
                         : null,
-                    tooltip: 'Save Mission',
+                    tooltip: 'Save Mission (local history)',
                     color: _droneService.currentMission != null
                         ? Colors.green
                         : null,
                   ),
                 ],
+                // Clear Mission button - visible when a mission is loaded
+                if (_droneService.currentMission != null && !isMissionActive)
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: _clearMission,
+                    tooltip: 'Clear Mission and Start New',
+                    color: Colors.red,
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.cloud_upload),
+                  onPressed:
+                      (!isMissionActive && _droneService.currentMission != null)
+                          ? () => _uploadCurrentMission()
+                          : null,
+                  tooltip: 'Upload Mission to Drone',
+                ),
                 IconButton(
                   icon: const Icon(Icons.zoom_in),
                   onPressed: () {
@@ -858,38 +1055,40 @@ class _MapViewState extends State<MapView> {
               child: SizedBox(
                 width: 56,
                 height: 56,
-                child: IconButton(
-                  icon: Icon(
-                    _isCapturing ? Icons.stop : Icons.camera_alt,
-                    size: 32,
-                    color: _isCapturing ? Colors.red : Colors.blue,
-                  ),
-                  onPressed: () async {
-                    setState(() {
-                      _isCapturing = !_isCapturing;
-                    });
-                    try {
-                      if (_isCapturing) {
-                        await _droneService.sendCaptureCommand('start_capture');
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('Camera capture started')),
-                        );
-                      } else {
-                        await _droneService.sendCaptureCommand('stop_capture');
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('Camera capture stopped')),
-                        );
-                      }
-                    } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Capture command failed: $e')),
-                      );
-                      setState(() {
-                        _isCapturing = !_isCapturing; // revert on error
-                      });
-                    }
+                child: Consumer<DroneService>(
+                  builder: (context, droneService, _) {
+                    final isCameraOn = droneService.isCameraOn;
+                    return IconButton(
+                      icon: Icon(
+                        isCameraOn ? Icons.stop : Icons.camera_alt,
+                        size: 32,
+                        color: isCameraOn ? Colors.red : Colors.blue,
+                      ),
+                      onPressed: () async {
+                        try {
+                          if (isCameraOn) {
+                            await _droneService
+                                .sendCaptureCommand('stop_capture');
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Camera capture stopped')),
+                            );
+                          } else {
+                            await _droneService
+                                .sendCaptureCommand('start_capture');
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Camera capture started')),
+                            );
+                          }
+                        } catch (e) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                                content: Text('Capture command failed: $e')),
+                          );
+                        }
+                      },
+                    );
                   },
                 ),
               ),
@@ -1025,6 +1224,15 @@ class _MapViewState extends State<MapView> {
       setState(() {
         _points.add(point);
       });
+      // As the user defines a new mission polygon, automatically zoom so that
+      // the drawn area clearly fills the screen.
+      if (_points.length >= 3) {
+        final base = <LatLng>[];
+        if (_droneLocation != null) base.add(_droneLocation!);
+        base.addAll(_points);
+        final hull = _computeConvexHull(base);
+        _fitMapToBounds(hull);
+      }
     }
   }
 
@@ -1073,7 +1281,8 @@ class _MapViewState extends State<MapView> {
   }
 
   Future<void> _saveMission() async {
-    // If mission is from history, update existing mission; otherwise create new
+    // If mission is from history, update existing mission; otherwise create new.
+    // NOTE: This method *only saves* to local history; it does NOT upload.
     final existingMission = _droneService.currentMission;
     Mission? missionToSave;
 
@@ -1127,24 +1336,37 @@ class _MapViewState extends State<MapView> {
       }
 
       _droneService.setMission(missionToSave, fromHistory: false);
-      try {
-        await _droneService.uploadMissionToAutopilot(missionToSave);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Mission uploaded to drone')),
-        );
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload failed: $e')),
-        );
-      }
       setState(() => _isDrawing = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mission saved successfully')),
+        const SnackBar(content: Text('Mission saved to history')),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content: Text('Please mark at least 3 points or load a mission')),
+      );
+    }
+  }
+
+  Future<void> _uploadCurrentMission() async {
+    final mission = _droneService.currentMission;
+    if (mission == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'No mission to upload. Please save or load a mission first')),
+      );
+      return;
+    }
+
+    try {
+      await _droneService.uploadMissionToAutopilot(mission);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Mission upload requested')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: $e')),
       );
     }
   }

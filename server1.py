@@ -478,6 +478,14 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
             "status": "emergency_return"
         })
 
+    elif msg_type == "get_camera_status":
+        print("[CAMERA] Received get_camera_status query")
+        # Check if camera is currently running
+        is_running = capture_task is not None and not capture_task.done()
+        status = "capture_started" if is_running else "capture_stopped"
+        await websocket.send_json({"type": "camera_status", "status": status})
+        print(f"[CAMERA] Sent camera status: {status}")
+
     elif msg_type == "start_capture":
         print("[CAMERA] Received start_capture command")
         if capture_task and not capture_task.done():

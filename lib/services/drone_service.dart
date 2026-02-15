@@ -37,6 +37,7 @@ class DroneService extends ChangeNotifier {
   final MissionStorage _missionStorage = MissionStorage();
   int _currentWaypointIndex = 0;
   int _totalWaypoints = 0;
+  bool _isCameraOn = false; // Camera state - persisted and synced with backend
 
   Stream<Telemetry> get telemetryStream => _telemetryController.stream;
   bool get isConnected => _isConnected;
@@ -50,6 +51,7 @@ class DroneService extends ChangeNotifier {
   bool get isMissionFromHistory => _isMissionFromHistory;
   double? get targetAltitude => _targetAltitude;
   double? get targetSpeed => _targetSpeed;
+  bool get isCameraOn => _isCameraOn;
 
   void setTargetAltitude(double? altitude) {
     _targetAltitude = altitude;
@@ -70,16 +72,76 @@ class DroneService extends ChangeNotifier {
   Future<void> initialize() async {
     if (_isInitialized) return;
     _isInitialized = true;
+    // Load persisted camera state
+    await _loadCameraState();
     notifyListeners();
+  }
+
+  /// Load camera state from SharedPreferences
+  Future<void> _loadCameraState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _isCameraOn = prefs.getBool('camera_state') ?? false;
+      debugPrint('[CAMERA] Loaded camera state from storage: $_isCameraOn');
+    } catch (e) {
+      debugPrint('[CAMERA] Failed to load camera state: $e');
+      _isCameraOn = false;
+    }
+  }
+
+  /// Persist camera state to SharedPreferences
+  Future<void> _saveCameraState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('camera_state', _isCameraOn);
+      debugPrint('[CAMERA] Saved camera state to storage: $_isCameraOn');
+    } catch (e) {
+      debugPrint('[CAMERA] Failed to save camera state: $e');
+    }
+  }
+
+  /// Set camera state (called internally when state changes)
+  void _setCameraState(bool isOn, {bool persist = true}) {
+    if (_isCameraOn == isOn) return;
+    _isCameraOn = isOn;
+    if (persist) {
+      _saveCameraState();
+    }
+    notifyListeners();
+    debugPrint('[CAMERA] Camera state updated: $_isCameraOn');
+  }
+
+  /// Query backend for current camera status
+  Future<void> queryCameraStatus() async {
+    try {
+      if (_wsChannel != null) {
+        final message = {'type': 'get_camera_status'};
+        _wsChannel!.sink.add(json.encode(message));
+        debugPrint('[CAMERA] Sent camera status query (WebSocket)');
+      } else if (socket != null) {
+        socket!.emit('get_camera_status');
+        debugPrint('[CAMERA] Sent camera status query (Socket.IO)');
+      } else {
+        debugPrint('[CAMERA] Cannot query camera status: not connected');
+      }
+    } catch (e) {
+      debugPrint('[CAMERA] Failed to query camera status: $e');
+    }
   }
 
   void setMission(Mission mission, {bool fromHistory = false}) {
     _currentMission = mission;
     _isMissionFromHistory = fromHistory;
-    // Reset upload status when new mission is set (unless it's from history and already uploaded)
-    if (!fromHistory) {
-      _isMissionUploaded = false;
-    }
+    // Any time a mission is set (new or from history), require a fresh upload.
+    _isMissionUploaded = false;
+    notifyListeners();
+  }
+
+  /// Clear the current mission, resetting the map to a clean state.
+  void clearMission() {
+    _currentMission = null;
+    _isMissionFromHistory = false;
+    _isMissionUploaded = false;
     notifyListeners();
   }
 
@@ -444,6 +506,13 @@ class DroneService extends ChangeNotifier {
 
   Future<void> sendCaptureCommand(String command) async {
     try {
+      // Update local state optimistically (will be confirmed by backend)
+      if (command == 'start_capture') {
+        _setCameraState(true, persist: true);
+      } else if (command == 'stop_capture') {
+        _setCameraState(false, persist: true);
+      }
+
       if (_wsChannel != null) {
         final message = {
           'type': command,
@@ -454,9 +523,15 @@ class DroneService extends ChangeNotifier {
       } else {
         throw Exception('Not connected to server');
       }
-      debugPrint('Capture command sent: $command');
+      debugPrint('[CAMERA] Capture command sent: $command');
     } catch (e) {
-      debugPrint('Failed to send capture command: $e');
+      debugPrint('[CAMERA] Failed to send capture command: $e');
+      // Revert state on error
+      if (command == 'start_capture') {
+        _setCameraState(false, persist: true);
+      } else if (command == 'stop_capture') {
+        _setCameraState(true, persist: true);
+      }
       rethrow;
     }
   }
@@ -648,6 +723,20 @@ class DroneService extends ChangeNotifier {
               notifyListeners();
               debugPrint('WS telemetry connection confirmed');
               _startConnectionValidation();
+              // Query camera status on connection to sync with backend
+              queryCameraStatus();
+            }
+          } else if (messageType == 'camera_status') {
+            debugPrint('[CAMERA] Camera status received: ${telemetryData['status']}');
+            final status = telemetryData['status'];
+            if (status == 'capture_started') {
+              _setCameraState(true, persist: true);
+            } else if (status == 'capture_stopped') {
+              _setCameraState(false, persist: true);
+            } else if (status == 'on' || status == 'running') {
+              _setCameraState(true, persist: true);
+            } else if (status == 'off' || status == 'stopped') {
+              _setCameraState(false, persist: true);
             }
           } else if (messageType == 'telemetry') {
             final telemetry = Telemetry.fromJson(telemetryData);
@@ -682,7 +771,19 @@ class DroneService extends ChangeNotifier {
           } else if (messageType == 'mission_status') {
             debugPrint('Mission status: ${telemetryData['status']}');
             final status = telemetryData['status'];
-            if (status == 'rtl_battery_low') {
+            if (status == 'uploaded') {
+              _isMissionUploaded = true;
+              notifyListeners();
+              debugPrint('[MISSION] Mission uploaded ACK received (WS)');
+            } else if (status == 'started') {
+              _isMissionActive = true;
+              notifyListeners();
+              debugPrint('[MISSION] Mission started (WS)');
+            } else if (status == 'stopped' || status == 'paused') {
+              _isMissionActive = false;
+              notifyListeners();
+              debugPrint('[MISSION] Mission ${status} (WS)');
+            } else if (status == 'rtl_battery_low') {
               _isMissionActive = false;
               
               // Save mission progress from RTL trigger (fire and forget)
@@ -803,6 +904,18 @@ class DroneService extends ChangeNotifier {
 
       // Start connection validation
       _startConnectionValidation();
+      // Query camera status on connection to sync with backend
+      queryCameraStatus();
+    });
+
+    socket!.on('camera_status', (data) {
+      debugPrint('[CAMERA] Camera status received (Socket.IO): $data');
+      final status = data is Map ? data['status'] : data;
+      if (status == 'capture_started' || status == 'on' || status == 'running') {
+        _setCameraState(true, persist: true);
+      } else if (status == 'capture_stopped' || status == 'off' || status == 'stopped') {
+        _setCameraState(false, persist: true);
+      }
     });
 
     socket!.onDisconnect((_) {
@@ -831,7 +944,19 @@ class DroneService extends ChangeNotifier {
     socket!.on('mission_status', (data) {
       debugPrint('Mission status received: $data');
       final status = data['status'];
-      if (status == 'completed') {
+      if (status == 'uploaded') {
+        _isMissionUploaded = true;
+        notifyListeners();
+        debugPrint('[MISSION] Mission uploaded ACK received (Socket.IO)');
+      } else if (status == 'started') {
+        _isMissionActive = true;
+        notifyListeners();
+        debugPrint('[MISSION] Mission started (Socket.IO)');
+      } else if (status == 'stopped' || status == 'paused') {
+        _isMissionActive = false;
+        notifyListeners();
+        debugPrint('[MISSION] Mission ${status} (Socket.IO)');
+      } else if (status == 'completed') {
         _isMissionActive = false;
         notifyListeners();
       } else if (status == 'rtl_battery_low') {
