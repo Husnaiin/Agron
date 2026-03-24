@@ -9,6 +9,7 @@ from typing import List, Dict, Any
 import pathlib
 import shutil
 from asyncio.subprocess import PIPE
+from collections import Counter
 
 try:
     from pymavlink import mavutil
@@ -26,7 +27,9 @@ mission_type = None  # Track mission type (e.g., 'dimr')
 total_waypoints = 0
 
 # Battery threshold for DIMR missions
-BATTERY_THRESHOLD = 90.0  # Battery percentage threshold for RTL (90%)
+BATTERY_THRESHOLD = 3.0  # Battery percentage threshold for RTL (90%)
+# Sliding window size for battery mode calculation (configurable)
+BATTERY_WINDOW_SIZE = 100
 
 # LiPo 6S discharge curve (voltage to percentage mapping)
 # Based on typical LiPo discharge characteristics
@@ -42,6 +45,7 @@ LIPO_DISCHARGE_CURVE = [
 
 rtl_triggered_by_battery = False
 battery_voltage_mv = 0  # Battery voltage in millivolts
+battery_window: List[int] = []
 
 # Persistent message queue for critical events (RTL, mission completion, etc.)
 pending_messages_file = pathlib.Path("/home/agron/pending_messages.json")
@@ -412,7 +416,7 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
                 # Start mission
                 _mission_start(m, 0, 0)
 
-
+        
         is_mission_active = True
         await broadcast_message({
             "type": "mission_status",
@@ -1072,7 +1076,7 @@ def _mavlink_reader_loop():
     if mavutil is None:
         print("pymavlink not installed; telemetry will remain static")
         return
-
+    
     while True:
         try:
             print(f"[MAVLINK] Connecting {MAVLINK_PORT} @ {MAVLINK_BAUD}...")
@@ -1267,7 +1271,7 @@ async def generate_telemetry():
 
         # Calculate mission progress based on waypoints
         if is_mission_active and total_waypoints > 0:
-            mission_progress = int((current_waypoint_index / total_waypoints) * 100)
+                mission_progress = int((current_waypoint_index / total_waypoints) * 100)
         
         # Calculate battery voltage for telemetry
         battery_voltage_v = battery_voltage_mv / 1000.0 if battery_voltage_mv > 0 else 0.0
@@ -1287,15 +1291,27 @@ async def generate_telemetry():
             "totalWaypoints": total_waypoints,
             "timestamp": datetime.now().isoformat()
         }
-
-        # Battery threshold monitoring for DIMR missions
+        
+        # Battery threshold monitoring for DIMR missions using mode of a sliding window
         if is_mission_active and mission_type == 'dimr' and not rtl_triggered_by_battery:
             try:
                 battery_level = float(drone_battery) if drone_battery is not None else 100.0
                 battery_v = battery_voltage_mv / 1000.0 if battery_voltage_mv > 0 else 0.0
-                
-                if battery_level < BATTERY_THRESHOLD:
-                    print(f"[MISSION] Battery {battery_level}% ({battery_v:.2f}V) < threshold {BATTERY_THRESHOLD}% - triggering RTL")
+
+                # Update sliding window
+                try:
+                    sample = int(round(battery_level))
+                except Exception:
+                    sample = int(battery_level) if battery_level is not None else 100
+                battery_window.append(sample)
+                if len(battery_window) > BATTERY_WINDOW_SIZE:
+                    battery_window.pop(0)
+
+                # Mode of the window
+                mode_val = Counter(battery_window).most_common(1)[0][0] if battery_window else sample
+
+                if mode_val < BATTERY_THRESHOLD:
+                    print(f"[MISSION] Battery mode={mode_val}% ({battery_v:.2f}V) < threshold {BATTERY_THRESHOLD}% - triggering RTL")
                     rtl_triggered_by_battery = True
                     
                     # Trigger RTL on autopilot
@@ -1304,7 +1320,7 @@ async def generate_telemetry():
                             m = globals().get("mavlink_master")
                         if m:
                             try:
-                                print("[MISSION] Setting RTL mode due to low battery")
+                                print("[MISSION] Setting RTL mode due to low battery (mode)")
                                 m.set_mode_apm('RTL')
                             except Exception:
                                 try:
@@ -1323,12 +1339,12 @@ async def generate_telemetry():
                     rtl_message = {
                         "type": "mission_status",
                         "status": "rtl_battery_low",
-                        "battery": battery_level,
+                        "battery": mode_val,
                         "batteryVoltage": round(battery_v, 2),
                         "currentWaypointIndex": current_waypoint_index,
                         "totalWaypoints": total_waypoints,
                         "progressPercentage": mission_progress,
-                        "message": f"RTL triggered: Battery at {battery_level}% ({battery_v:.2f}V)"
+                        "message": f"RTL triggered: Battery mode {mode_val}% ({battery_v:.2f}V)"
                     }
                     
                     # Save to persistent queue (in case connection drops)
@@ -1341,8 +1357,8 @@ async def generate_telemetry():
 
         if is_mission_active:
             print(f"telem: lat={lat_out}, lon={lon_out}, batt={drone_battery}% ({battery_voltage_v:.2f}V), progress={mission_progress}%, wp={current_waypoint_index}/{total_waypoints}")
-        await broadcast_message(telemetry)
-
+            await broadcast_message(telemetry)
+        
         await asyncio.sleep(1)
 
 @app.on_event("startup")
