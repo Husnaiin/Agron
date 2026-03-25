@@ -121,49 +121,14 @@ class HomeScreen extends StatelessWidget {
         ),
         body: Column(
           children: [
-            Expanded(
-              child: Stack(
-                children: [
-                  const MapView(),
-                  Positioned(
-                    top: 16,
-                    right: 16,
-                    child: Card(
-                        // child: Padding(
-                        //   padding: const EdgeInsets.all(8.0),
-                        //   // child: Column(
-                        //   //   children: [
-                        //   //     ElevatedButton(
-                        //   //       onPressed: () {
-                        //   //         // TODO: Implement mission planning
-                        //   //       },
-                        //   //       child: const Text('Plan Mission'),
-                        //   //     ),
-                        //   //     const SizedBox(height: 8),
-                        //   //     ElevatedButton(
-                        //   //       onPressed: () {
-                        //   //         // TODO: Implement emergency return
-                        //   //       },
-                        //   //       style: ElevatedButton.styleFrom(
-                        //   //         backgroundColor: Colors.red,
-                        //   //       ),
-                        //   //       child: const Text('Emergency Return'),
-                        //   //     ),
-                        //   //   ],
-                        //   // ),
-                        ),
-                  ),
-                ],
-              ),
+            const Expanded(
+              child: MapView(),
             ),
-            // Bottom inputs removed as per request
-            const SizedBox.shrink(),
             const Divider(
-              color: Color.fromARGB(255, 250, 242, 242), // line color
-              thickness: 2, // line thickness
-              indent: 20, // left spacing
-              endIndent: 20, // right spacing
-              height: 0.2, // height of the divider
+              height: 1,
+              thickness: 1,
+              indent: 12,
+              endIndent: 12,
             ),
             TelemetryPanel(
               droneService: droneService,

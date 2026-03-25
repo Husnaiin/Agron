@@ -44,6 +44,13 @@ class MissionStorage {
     await prefs.setString(_localMissionsKey, json.encode(jsonList));
   }
   
+  /// Newest missions first (history list).
+  List<Mission> _sortByCreatedAtDesc(List<Mission> missions) {
+    final list = List<Mission>.from(missions);
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
   /// Get missions from local cache
   Future<List<Mission>> _getLocalMissions() async {
     final prefs = await SharedPreferences.getInstance();
@@ -133,14 +140,14 @@ class MissionStorage {
           final jsonList = mergedMap.values.map((m) => m.toJson()).toList();
           await prefs.setString(_localMissionsKey, json.encode(jsonList));
           
-          return mergedMap.values.toList();
+          return _sortByCreatedAtDesc(mergedMap.values.toList());
         }
       } catch (e) {
         print('[STORAGE] Firebase fetch failed: $e (using local cache)');
       }
     }
     
-    return localMissions;
+    return _sortByCreatedAtDesc(localMissions);
   }
 
   Future<List<Mission>> getScheduledMissions() async {

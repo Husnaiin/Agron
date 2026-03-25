@@ -32,6 +32,12 @@ class DroneService extends ChangeNotifier {
   bool _userInitiatedDisconnect = false;
   bool _isMissionUploaded = false;
   bool _isMissionFromHistory = false;
+  /// True after the user changes type, targets, or map geometry while a history mission is loaded.
+  bool _historyMissionEdited = false;
+  /// Mission type selected when a history mission was loaded (baseline for "edited" detection).
+  String _baselineMissionTypeWhenHistoryLoaded = 'inspection';
+  /// Incremented when a mission is loaded from history so the map can clear local draw state.
+  int _missionReplaceToken = 0;
   double? _targetAltitude;
   double? _targetSpeed;
   final MissionStorage _missionStorage = MissionStorage();
@@ -48,8 +54,18 @@ class DroneService extends ChangeNotifier {
   String get selectedMissionType => _selectedMissionType;
   bool get isMissionUploaded => _isMissionUploaded;
   bool get isMissionFromHistory => _isMissionFromHistory;
+  bool get historyMissionEdited => _historyMissionEdited;
+  int get missionReplaceToken => _missionReplaceToken;
   double? get targetAltitude => _targetAltitude;
   double? get targetSpeed => _targetSpeed;
+
+  /// Call when the user changes geometry (map points, etc.) so save uploads a new plan.
+  void markHistoryMissionEdited() {
+    if (_currentMission == null) return;
+    _historyMissionEdited = true;
+    _isMissionUploaded = false;
+    notifyListeners();
+  }
 
   void setTargetAltitude(double? altitude) {
     _targetAltitude = altitude;
@@ -64,6 +80,10 @@ class DroneService extends ChangeNotifier {
   void setSelectedMissionType(String type) {
     if (_selectedMissionType == type) return;
     _selectedMissionType = type;
+    _isMissionUploaded = false;
+    if (_isMissionFromHistory && type != _baselineMissionTypeWhenHistoryLoaded) {
+      _historyMissionEdited = true;
+    }
     notifyListeners();
   }
 
@@ -74,12 +94,65 @@ class DroneService extends ChangeNotifier {
   }
 
   void setMission(Mission mission, {bool fromHistory = false}) {
+    final prevId = _currentMission?.id;
     _currentMission = mission;
     _isMissionFromHistory = fromHistory;
-    // Reset upload status when new mission is set (unless it's from history and already uploaded)
-    if (!fromHistory) {
-      _isMissionUploaded = false;
+    _historyMissionEdited = false;
+    _isMissionUploaded = false;
+    // New or replaced mission: clear map draw state on the home screen.
+    if (fromHistory || prevId != mission.id) {
+      _missionReplaceToken++;
     }
+    if (fromHistory) {
+      _targetAltitude = mission.defaultAltitude;
+      _targetSpeed = mission.defaultSpeed;
+      _baselineMissionTypeWhenHistoryLoaded = _selectedMissionType;
+    }
+    notifyListeners();
+  }
+
+  /// Remove the active plan from the GCS (map + start flow) without touching storage.
+  void clearCurrentMission() {
+    if (_currentMission == null) return;
+    _currentMission = null;
+    _isMissionFromHistory = false;
+    _historyMissionEdited = false;
+    _isMissionUploaded = false;
+    _missionReplaceToken++;
+    notifyListeners();
+  }
+
+  /// New id, reset progress, same geometry baseline; call before regenerating waypoints when a
+  /// history mission was edited.
+  void forkCurrentMissionFromHistory() {
+    final m = _currentMission;
+    if (m == null || !_isMissionFromHistory) return;
+
+    final newId = DateTime.now().millisecondsSinceEpoch.toString();
+    final base = m.name.trim();
+    final name = base.isEmpty
+        ? 'Mission $newId'
+        : (base.contains('(edited)') ? base : '$base (edited)');
+
+    _currentMission = Mission(
+      id: newId,
+      name: name,
+      waypoints: List<MissionWaypoint>.from(m.waypoints),
+      defaultAltitude: _targetAltitude ?? m.defaultAltitude,
+      defaultSprayRate: m.defaultSprayRate,
+      defaultSpeed: _targetSpeed ?? m.defaultSpeed,
+      createdAt: DateTime.now(),
+      completedAt: null,
+      scheduledAt: m.scheduledAt,
+      isScheduled: m.isScheduled,
+      reminderEnabled: m.reminderEnabled,
+      status: MissionStatus.pending,
+      progressPercentage: 0,
+      lastCompletedWaypointIndex: -1,
+    );
+    _isMissionFromHistory = false;
+    _historyMissionEdited = false;
+    _isMissionUploaded = false;
     notifyListeners();
   }
 
@@ -368,6 +441,7 @@ class DroneService extends ChangeNotifier {
     try {
       // Derive waypoints per mission type on-the-fly
       final effectiveWaypoints = _buildEffectiveWaypoints(mission);
+      final wireWaypoints = waypointsToWireList(effectiveWaypoints);
       final missionJson = Mission(
         id: mission.id,
         name: mission.name,
@@ -379,10 +453,11 @@ class DroneService extends ChangeNotifier {
         completedAt: mission.completedAt,
         status: mission.status,
       ).toJson();
+      missionJson['waypoints'] = wireWaypoints;
       if (_wsChannel != null) {
         final message = {
           'type': 'upload_mission',
-          'waypoints': missionJson['waypoints'],
+          'waypoints': wireWaypoints,
           'defaultAltitude': mission.defaultAltitude,
           'defaultSprayRate': mission.defaultSprayRate,
           'defaultSpeed': mission.defaultSpeed,
@@ -406,6 +481,20 @@ class DroneService extends ChangeNotifier {
       notifyListeners();
       rethrow;
     }
+  }
+
+  /// Flat waypoint list for WebSocket/Socket.IO (matches server examples: top-level lat/lon).
+  static List<Map<String, dynamic>> waypointsToWireList(
+      List<MissionWaypoint> wps) {
+    return wps
+        .map((w) => <String, dynamic>{
+              'latitude': w.position.latitude,
+              'longitude': w.position.longitude,
+              'altitude': w.altitude,
+              'sprayRate': w.sprayRate,
+              'sprayEnabled': w.sprayEnabled,
+            })
+        .toList();
   }
 
   List<MissionWaypoint> _buildEffectiveWaypoints(Mission mission) {
@@ -444,19 +533,22 @@ class DroneService extends ChangeNotifier {
 
   Future<void> sendCaptureCommand(String command) async {
     try {
+      // IOWebSocketChannel buffers sink.add() until WebSocket.connect completes.
+      // Await ready so capture commands are not dropped on a fresh connection.
       if (_wsChannel != null) {
-        final message = {
-          'type': command,
-        };
-        _wsChannel!.sink.add(json.encode(message));
+        await _wsChannel!.ready;
+        final encoded = json.encode(<String, dynamic>{'type': command});
+        debugPrint('[CAMERA] WS send: $encoded');
+        _wsChannel!.sink.add(encoded);
       } else if (socket != null) {
+        debugPrint('[CAMERA] Socket.IO emit: $command');
         socket!.emit(command);
       } else {
         throw Exception('Not connected to server');
       }
       debugPrint('Capture command sent: $command');
-    } catch (e) {
-      debugPrint('Failed to send capture command: $e');
+    } catch (e, st) {
+      debugPrint('Failed to send capture command: $e\n$st');
       rethrow;
     }
   }
@@ -1040,12 +1132,14 @@ Timestamp: ${telemetry.timestamp}
         status: missionToStart.status,
       );
       final missionJson = effectiveMission.toJson();
-      debugPrint('Mission JSON: ${json.encode(missionJson)}');
+      missionJson['waypoints'] = waypointsToWireList(effectiveWaypoints);
+      debugPrint(
+          'Mission JSON (truncated): id=${missionJson['id']}, wps=${(missionJson['waypoints'] as List).length}');
 
       // Print first waypoint for debugging
-      if (missionToStart.waypoints.isNotEmpty) {
-        final firstWaypoint = effectiveWaypoints.first;
-        debugPrint('First waypoint: ${json.encode(firstWaypoint.toJson())}');
+      if (effectiveWaypoints.isNotEmpty) {
+        debugPrint(
+            'First waypoint: ${json.encode((missionJson['waypoints'] as List).first)}');
       }
 
       if (socket != null) {
@@ -1129,9 +1223,7 @@ Timestamp: ${telemetry.timestamp}
       _wsChannel!.sink.add(json.encode({'type': 'stop_mission'}));
     }
 
-    // Stop mission locally
     _isMissionActive = false;
-    _currentMission = null;
     notifyListeners();
   }
 

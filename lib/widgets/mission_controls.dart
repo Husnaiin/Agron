@@ -11,17 +11,16 @@ class MissionControls extends StatefulWidget {
 }
 
 class _MissionControlsState extends State<MissionControls> {
-  String _selectedMissionType = 'inspection';
-  bool _isMissionActive = false;
   bool _isPaused = false;
 
   @override
   Widget build(BuildContext context) {
     final droneService = Provider.of<DroneService>(context);
     final isMissionUploaded = droneService.isMissionUploaded;
+    final isMissionActive = droneService.isMissionActive;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         boxShadow: [
@@ -36,13 +35,19 @@ class _MissionControlsState extends State<MissionControls> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Expanded(
                 child: DropdownButtonFormField<String>(
-                  value: _selectedMissionType,
+                  value: droneService.selectedMissionType,
                   decoration: const InputDecoration(
                     labelText: 'Mission Type',
                     border: OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                   ),
                   isExpanded: true,
                   items: const [
@@ -63,11 +68,10 @@ class _MissionControlsState extends State<MissionControls> {
                       child: Text('DIMR (Dense + Resumption)'),
                     ),
                   ],
-                  onChanged: _isMissionActive
+                  onChanged: isMissionActive
                       ? null
                       : (value) {
                           if (value != null) {
-                            setState(() => _selectedMissionType = value);
                             context
                                 .read<DroneService>()
                                 .setSelectedMissionType(value);
@@ -75,29 +79,24 @@ class _MissionControlsState extends State<MissionControls> {
                         },
                 ),
               ),
-              const SizedBox(width: 12),
-              Flexible(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: ElevatedButton(
-                    onPressed: (_isMissionActive || !isMissionUploaded)
-                        ? null
-                        : () => _startMission(droneService),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 14,
-                      ),
-                    ),
-                    child: const Text('Start Mission'),
+              const SizedBox(width: 10),
+              ElevatedButton(
+                onPressed: (isMissionActive || !isMissionUploaded)
+                    ? null
+                    : () => _startMission(droneService),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 12,
                   ),
                 ),
+                child: const Text('Start Mission'),
               ),
             ],
           ),
-          if (_isMissionActive) ...[
-            const SizedBox(height: 16),
+          if (isMissionActive) ...[
+            const SizedBox(height: 10),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -105,14 +104,22 @@ class _MissionControlsState extends State<MissionControls> {
                   onPressed: () => _togglePause(droneService),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _isPaused ? Colors.green : Colors.orange,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                   ),
                   child: Text(_isPaused ? 'Resume' : 'Pause'),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 12),
                 ElevatedButton(
                   onPressed: () => _showEmergencyPuzzle(droneService),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                   ),
                   child: const Text('Stop'),
                 ),
@@ -136,22 +143,24 @@ class _MissionControlsState extends State<MissionControls> {
     }
 
     try {
-      setState(() => _isMissionActive = true);
-      // Check if this is a resume (progress > 0 and < 100)
-      final isResume = mission.progressPercentage > 0 && mission.progressPercentage < 100;
+      final isResume = mission.progressPercentage > 0 &&
+          mission.progressPercentage < 100;
       await droneService.startMission(mission, isResume: isResume);
-      
-      final message = isResume 
+
+      final message = isResume
           ? 'Mission resumed from ${mission.progressPercentage}%'
           : 'Mission started successfully';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
     } catch (e) {
-      setState(() => _isMissionActive = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start mission: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start mission: $e')),
+        );
+      }
     }
   }
 
@@ -171,7 +180,7 @@ class _MissionControlsState extends State<MissionControls> {
       builder: (dialogContext) => EmergencyPuzzle(
         onPuzzleSolved: () async {
           await _stopMission(droneService);
-          Navigator.of(dialogContext).pop(); // Close the puzzle dialog
+          if (dialogContext.mounted) Navigator.of(dialogContext).pop();
         },
       ),
     );
@@ -179,9 +188,10 @@ class _MissionControlsState extends State<MissionControls> {
 
   Future<void> _stopMission(DroneService droneService) async {
     await droneService.stopMission();
-    setState(() {
-      _isMissionActive = false;
-      _isPaused = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isPaused = false;
+      });
+    }
   }
 }

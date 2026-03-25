@@ -381,7 +381,11 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
   void _startMission(Mission mission, {bool isResume = false}) {
     final droneService = context.read<DroneService>();
     droneService.setMission(mission, fromHistory: true);
-    Navigator.pushReplacementNamed(context, '/home');
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+    } else {
+      Navigator.pushReplacementNamed(context, '/home');
+    }
   }
   
   void _resumeMission(Mission mission) {
@@ -391,7 +395,7 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
     // Show resume confirmation dialog
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Resume Mission'),
         content: Text(
           'Resume mission "${mission.name}" from ${mission.progressPercentage}% completion?\n\n'
@@ -399,13 +403,17 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
             onPressed: () {
-              Navigator.pop(context);
-              Navigator.pushReplacementNamed(context, '/home');
+              Navigator.pop(dialogContext);
+              if (Navigator.canPop(context)) {
+                Navigator.pop(context);
+              } else {
+                Navigator.pushReplacementNamed(context, '/home');
+              }
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             child: const Text('Resume'),
