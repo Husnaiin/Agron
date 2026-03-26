@@ -16,6 +16,7 @@ import 'package:http/http.dart' as http;
 import '../services/drone_service.dart';
 import '../services/mission_storage.dart';
 import '../models/mission.dart';
+import '../models/field.dart';
 import '../models/telemetry.dart';
 // import 'emergency_puzzle.dart';
 import 'audio_recorder.dart';
@@ -100,6 +101,10 @@ class _MapViewState extends State<MapView> {
 
   // Dense inspection preview
   final List<LatLng> _densePathPoints = [];
+
+  /// [Field.boundary] for [currentMission.fieldId] — fence must not use hull of coverage waypoints.
+  List<LatLng>? _cachedFieldBoundary;
+  String? _cachedFieldBoundaryForFieldId;
 
   // Simple compass painter uses heading in degrees
   // Renders a dial with a red north arrow rotated by heading
@@ -371,47 +376,168 @@ class _MapViewState extends State<MapView> {
         if (replaced) {
           _points.clear();
           _isDrawing = false;
+          _cachedFieldBoundary = null;
+          _cachedFieldBoundaryForFieldId = null;
         }
         if (ended) {
           _droneLocation = null;
           _points.clear();
         }
       });
+      if (replaced) {
+        _scheduleRefreshFieldBoundary();
+      }
     }
   }
 
-  /// Vertices to edit when turning the pencil on with a mission already shown (history or saved).
-  List<LatLng> _seedPointsFromMission(Mission m) {
-    if (m.waypoints.length < 3) return [];
+  /// Strip takeoff / first waypoint when it coincides with drone (same as flight plans).
+  List<LatLng> _missionPositionsExcludingLeadingDrone(Mission m) {
     final positions = m.waypoints.map((w) => w.position).toList();
-    if (positions.length > 24) {
-      return _computeConvexHull(positions);
-    }
+    if (positions.isEmpty) return [];
     if (_droneLocation != null) {
-      final d = _droneLocation!;
-      final first = positions.first;
-      if (_calculateDistance(d, first) < 25.0) {
-        final rest = List<LatLng>.from(positions.skip(1));
-        if (rest.length >= 3) return rest;
+      if (_calculateDistance(_droneLocation!, positions.first) < 25.0) {
+        return List<LatLng>.from(positions.skip(1));
       }
     }
     return List<LatLng>.from(positions);
   }
 
-  /// Outline used for field summary when showing a loaded mission (not local draw).
-  List<LatLng> _missionOutlineForSummary(Mission m) {
+  /// Convex hull of the field polygon from stored waypoints (never dense-grid vertices).
+  List<LatLng> _convexFieldHullFromMission(Mission m) {
+    final positions = _missionPositionsExcludingLeadingDrone(m);
+    if (positions.length < 3) return [];
+    return _computeConvexHull(positions);
+  }
+
+  /// Vertices to edit when turning the pencil on with a mission already shown (history or saved).
+  List<LatLng> _seedPointsFromMission(Mission m) {
     if (m.waypoints.length < 3) return [];
-    final positions = m.waypoints.map((w) => w.position).toList();
-    if (positions.length > 24) {
-      return _computeConvexHull(positions);
+    if (_cachedFieldBoundary != null &&
+        _cachedFieldBoundaryForFieldId == m.fieldId &&
+        _cachedFieldBoundary!.length >= 3) {
+      return List<LatLng>.from(_computeConvexHull(_cachedFieldBoundary!));
+    }
+    final positions = _missionPositionsExcludingLeadingDrone(m);
+    if (positions.length < 3) return [];
+    final hull = _computeConvexHull(positions);
+    // Dense / grid missions: only offer hull corners for editing (avoids rounded fake corners).
+    if (positions.length > 24 || positions.length > hull.length + 2) {
+      return hull;
     }
     return List<LatLng>.from(positions);
+  }
+
+  /// Field outline for summary, save regen, and [Field] boundary — hull of user polygon only.
+  List<LatLng> _missionOutlineForSummary(Mission m) {
+    return _convexFieldHullFromMission(m);
   }
 
   /// True when stored waypoints look like a dense grid (many interior points), not a short hull/path.
   bool _looksLikeStoredDensePattern(Mission m, List<LatLng> outline) {
     if (m.waypoints.length < 3 || outline.length < 3) return false;
     return m.waypoints.length > outline.length + 2;
+  }
+
+  /// True when stored positions are a coverage pattern, not a short perimeter.
+  bool _storedWaypointsLookDense(Mission m) {
+    final pos = _missionPositionsExcludingLeadingDrone(m);
+    if (pos.length < 3) return false;
+    final hull = _computeConvexHull(pos);
+    return pos.length > hull.length + 2;
+  }
+
+  /// Authoritative field fence: saved [Field.boundary] when present, else hull of mission waypoints.
+  Future<List<LatLng>> _fieldBoundaryHullForMission(Mission m) async {
+    if (m.fieldId.isNotEmpty) {
+      final f = await _missionStorage.getFieldById(m.fieldId);
+      if (f != null && f.boundary.length >= 3) {
+        return _computeConvexHull(f.boundary);
+      }
+    }
+    return _convexFieldHullFromMission(m);
+  }
+
+  void _scheduleRefreshFieldBoundary() {
+    final m = _droneService.currentMission;
+    final fid = m?.fieldId;
+    if (fid == null || fid.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _cachedFieldBoundary = null;
+          _cachedFieldBoundaryForFieldId = null;
+        });
+      }
+      return;
+    }
+    final loadId = fid;
+    _missionStorage.getFieldById(loadId).then((f) {
+      if (!mounted) return;
+      if (_droneService.currentMission?.fieldId != loadId) return;
+      final b = f?.boundary;
+      setState(() {
+        _cachedFieldBoundaryForFieldId = loadId;
+        _cachedFieldBoundary =
+            (b != null && b.length >= 3) ? List<LatLng>.from(b) : null;
+      });
+    });
+  }
+
+  /// Closed ring for fence + dense preview (drawn hull, else field boundary, else mission fallback).
+  List<LatLng> _fenceHullForDisplay() {
+    if (_points.length >= 3) return _computeConvexHull(_points);
+    final m = _droneService.currentMission;
+    if (m == null) return [];
+    if (_cachedFieldBoundary != null &&
+        _cachedFieldBoundary!.length >= 3 &&
+        _cachedFieldBoundaryForFieldId == m.fieldId) {
+      return _computeConvexHull(_cachedFieldBoundary!);
+    }
+    return _convexFieldHullFromMission(m);
+  }
+
+  Future<Mission?> _createDenseMissionPreservingMeta(
+    Mission m,
+    List<LatLng> hull,
+    String missionType,
+  ) async {
+    if (hull.length < 3) return null;
+    final pathAlt = _densePathPlanningAltitudeM();
+    final waypointsToSave = _generateDenseInspectionPath(
+      hull,
+      pathAlt,
+      startPoint: _droneLocation,
+      returnToStart: true,
+    );
+    if (waypointsToSave.isEmpty) return null;
+    final alt = _droneService.targetAltitude ?? m.defaultAltitude;
+    final spd = _droneService.targetSpeed ?? m.defaultSpeed;
+    return Mission(
+      id: m.id,
+      name: m.name,
+      waypoints: waypointsToSave
+          .map(
+            (p) => MissionWaypoint(
+              position: p,
+              altitude: alt,
+              sprayRate: m.defaultSprayRate,
+              sprayEnabled: true,
+            ),
+          )
+          .toList(),
+      defaultAltitude: alt,
+      defaultSprayRate: m.defaultSprayRate,
+      defaultSpeed: spd,
+      createdAt: m.createdAt,
+      completedAt: m.completedAt,
+      scheduledAt: m.scheduledAt,
+      isScheduled: m.isScheduled,
+      reminderEnabled: m.reminderEnabled,
+      status: m.status,
+      progressPercentage: m.progressPercentage,
+      lastCompletedWaypointIndex: m.lastCompletedWaypointIndex,
+      fieldId: m.fieldId,
+      missionType: missionType,
+    );
   }
 
   void _setupTelemetrySubscription() {
@@ -513,6 +639,7 @@ class _MapViewState extends State<MapView> {
   void _undoLastPoint() {
     if (_points.isNotEmpty) {
       _droneService.markHistoryMissionEdited();
+      _droneService.markFieldOutlineEdited();
       setState(() {
         _points.removeLast();
       });
@@ -605,7 +732,7 @@ class _MapViewState extends State<MapView> {
           '[SAVE_MISSION] Saving $missionType mission with ${waypointsToSave.length} user waypoints');
     }
 
-    final mission = Mission(
+    return Mission(
       id: id,
       name: name,
       waypoints: waypointsToSave
@@ -620,17 +747,42 @@ class _MapViewState extends State<MapView> {
       defaultSprayRate: defaultSprayRate,
       defaultSpeed: 5.0, // default speed in m/s
       createdAt: createdAt,
+      missionType: missionType,
     );
+  }
 
-    try {
-      await _missionStorage.saveMission(mission);
-      return mission;
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save mission: $e')),
-      );
-      return null;
-    }
+  Future<List<LatLng>> _boundaryVerticesForField(Mission mission) async {
+    if (_points.length >= 3) return _computeConvexHull(_points);
+    return _fieldBoundaryHullForMission(mission);
+  }
+
+  Future<String?> _promptNewFieldName() async {
+    final controller = TextEditingController(
+      text: 'Field ${DateTime.now().toIso8601String().split('T').first}',
+    );
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Name this field'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(labelText: 'Field name'),
+          autofocus: true,
+          onSubmitted: (_) =>
+              Navigator.pop(ctx, controller.text.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   // Removed emergency puzzle trigger from map to reduce warnings
@@ -644,19 +796,11 @@ class _MapViewState extends State<MapView> {
     // Listen to service to rebuild UI on state changes
     final service = Provider.of<DroneService>(context);
     final isMissionActive = service.isMissionActive;
-    final hasDrawableField = _points.length >= 3;
-    final missionPoints = service.currentMission != null
-        ? service.currentMission!.waypoints.map((w) => w.position).toList()
-        : _points;
-    final hullPoints = missionPoints.isNotEmpty
-        ? _computeConvexHull(missionPoints)
-        : <LatLng>[];
-    final List<LatLng> drawingBasePoints = [];
-    if (_droneLocation != null) drawingBasePoints.add(_droneLocation!);
-    drawingBasePoints.addAll(_points);
-    final drawingHullPoints = drawingBasePoints.length >= 3
-        ? _computeConvexHull(drawingBasePoints)
-        : <LatLng>[];
+    final fenceHull = _fenceHullForDisplay();
+    final hullPoints =
+        fenceHull.length >= 3 ? fenceHull : <LatLng>[];
+    final drawingHullPoints =
+        _points.length >= 3 ? _computeConvexHull(_points) : <LatLng>[];
 
     return Stack(
       children: [
@@ -689,54 +833,65 @@ class _MapViewState extends State<MapView> {
                   ),
                 ],
               ),
-            // Remove live mobile location layer; focus on drone position
-            if (!isMissionActive && hasDrawableField) ...[
-              PolygonLayer(
-                polygons: [
-                  Polygon(
-                    points: drawingHullPoints,
-                    color: Colors.blue.withAlpha(50),
-                    borderStrokeWidth: 2,
-                    borderColor: Colors.blue,
-                    isFilled: true,
-                  ),
+            // Live draw: show vertex markers from the first tap; hull fill from 3+ points.
+            if (!isMissionActive && _isDrawing && _points.isNotEmpty) ...[
+              if (_points.length >= 3) ...[
+                PolygonLayer(
+                  polygons: [
+                    Polygon(
+                      points: drawingHullPoints,
+                      color: Colors.blue.withAlpha(50),
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.blue,
+                      isFilled: true,
+                    ),
+                  ],
+                ),
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: drawingHullPoints,
+                      color: Colors.blue,
+                      strokeWidth: 2,
+                    ),
+                  ],
+                ),
+                if ((Provider.of<DroneService>(context, listen: true)
+                            .selectedMissionType ==
+                        'dense_inspection' ||
+                    Provider.of<DroneService>(context, listen: true)
+                            .selectedMissionType ==
+                        'dimr') &&
+                    drawingHullPoints.length >= 3) ...[
+                  Builder(builder: (context) {
+                    final pathAlt = _densePathPlanningAltitudeM();
+                    _densePathPoints
+                      ..clear()
+                      ..addAll(_generateDenseInspectionPath(
+                          drawingHullPoints, pathAlt,
+                          startPoint: _droneLocation, returnToStart: true));
+                    return PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: _densePathPoints,
+                          color: Colors.purple,
+                          strokeWidth: 3,
+                          isDotted: true,
+                        ),
+                      ],
+                    );
+                  }),
                 ],
-              ),
-              PolylineLayer(
-                polylines: [
-                  Polyline(
-                    points: drawingHullPoints,
-                    color: Colors.blue,
-                    strokeWidth: 2,
-                  ),
-                ],
-              ),
-              if ((Provider.of<DroneService>(context, listen: true)
-                          .selectedMissionType ==
-                      'dense_inspection' ||
-                  Provider.of<DroneService>(context, listen: true)
-                          .selectedMissionType ==
-                      'dimr') &&
-                  drawingHullPoints.length >= 3) ...[
-                // Compute and render dense inspection preview
-                Builder(builder: (context) {
-                  final pathAlt = _densePathPlanningAltitudeM();
-                  _densePathPoints
-                    ..clear()
-                    ..addAll(_generateDenseInspectionPath(
-                        drawingHullPoints, pathAlt,
-                        startPoint: _droneLocation, returnToStart: true));
-                  return PolylineLayer(
-                    polylines: [
-                      Polyline(
-                        points: _densePathPoints,
-                        color: Colors.purple,
-                        strokeWidth: 3,
-                        isDotted: true,
-                      ),
-                    ],
-                  );
-                }),
+              ] else if (_points.length >= 2) ...[
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: List<LatLng>.from(_points),
+                      color: Colors.blue,
+                      strokeWidth: 2,
+                    ),
+                  ],
+                ),
               ],
               MarkerLayer(
                 markers: _points
@@ -1046,6 +1201,7 @@ class _MapViewState extends State<MapView> {
           TextButton(
             onPressed: () {
               _droneService.markHistoryMissionEdited();
+              _droneService.markFieldOutlineEdited();
               setState(() {
                 _points.removeAt(index);
               });
@@ -1064,17 +1220,15 @@ class _MapViewState extends State<MapView> {
 
   void _openFieldSummary() {
     if (_points.length >= 3) {
-      _showFieldSummaryForPolygon(_points, title: 'Field summary');
+      _showFieldSummaryForPolygon(_computeConvexHull(_points),
+          title: 'Field summary');
       return;
     }
-    final m = _droneService.currentMission;
-    if (m != null) {
-      final outline = _missionOutlineForSummary(m);
-      if (outline.length >= 3) {
-        _showFieldSummaryForPolygon(outline,
-            title: 'Field summary (loaded mission)');
-        return;
-      }
+    final ring = _fenceHullForDisplay();
+    if (ring.length >= 3) {
+      _showFieldSummaryForPolygon(ring,
+          title: 'Field summary (loaded mission)');
+      return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -1172,6 +1326,7 @@ class _MapViewState extends State<MapView> {
   void _handleMapTap(TapPosition tapPosition, LatLng point) {
     if (_isDrawing) {
       _droneService.markHistoryMissionEdited();
+      _droneService.markFieldOutlineEdited();
       setState(() {
         _points.add(point);
       });
@@ -1192,42 +1347,59 @@ class _MapViewState extends State<MapView> {
     Mission? missionToSave;
 
     final hasPoly = _points.length >= 3;
-    final outlineAfterFork = (didForkFromHistory &&
-            !hasPoly &&
-            existingMission != null)
-        ? _missionOutlineForSummary(existingMission)
-        : <LatLng>[];
-    final hasOutlineForRegen =
-        outlineAfterFork.length >= 3 ? outlineAfterFork : null;
+    List<LatLng>? regenOutline;
+    if (didForkFromHistory && !hasPoly && existingMission != null) {
+      var o = await _fieldBoundaryHullForMission(existingMission);
+      if (o.length < 3) {
+        o = _missionOutlineForSummary(existingMission);
+      }
+      regenOutline = o.length >= 3 ? o : null;
+    }
 
-    if (hasPoly || hasOutlineForRegen != null) {
+    if (hasPoly || regenOutline != null) {
       // After forkCurrentMissionFromHistory(), local [fromHistory] is still true but the mission
       // must be rebuilt for the *current* mission type — do not reuse forked dense waypoints.
       if (fromHistory && !historyEdited && !didForkFromHistory) {
         final m = existingMission!;
-        final altitude =
-            _droneService.targetAltitude ?? m.defaultAltitude;
-        final speed = _droneService.targetSpeed ?? m.defaultSpeed;
-        missionToSave = Mission(
-          id: m.id,
-          name: m.name,
-          waypoints: m.waypoints,
-          defaultAltitude: altitude,
-          defaultSprayRate: m.defaultSprayRate,
-          defaultSpeed: speed,
-          createdAt: m.createdAt,
-          completedAt: m.completedAt,
-          scheduledAt: m.scheduledAt,
-          isScheduled: m.isScheduled,
-          reminderEnabled: m.reminderEnabled,
-          status: m.status,
-          progressPercentage: m.progressPercentage,
-          lastCompletedWaypointIndex: m.lastCompletedWaypointIndex,
-        );
+        final sel = _droneService.selectedMissionType;
+        Mission? denseBuilt;
+        if ((sel == 'dense_inspection' || sel == 'dimr') &&
+            !_storedWaypointsLookDense(m)) {
+          final fh = await _fieldBoundaryHullForMission(m);
+          if (fh.length >= 3) {
+            denseBuilt =
+                await _createDenseMissionPreservingMeta(m, fh, sel);
+          }
+        }
+        if (denseBuilt != null) {
+          missionToSave = denseBuilt;
+        } else {
+          final altitude =
+              _droneService.targetAltitude ?? m.defaultAltitude;
+          final speed = _droneService.targetSpeed ?? m.defaultSpeed;
+          missionToSave = Mission(
+            id: m.id,
+            name: m.name,
+            waypoints: m.waypoints,
+            defaultAltitude: altitude,
+            defaultSprayRate: m.defaultSprayRate,
+            defaultSpeed: speed,
+            createdAt: m.createdAt,
+            completedAt: m.completedAt,
+            scheduledAt: m.scheduledAt,
+            isScheduled: m.isScheduled,
+            reminderEnabled: m.reminderEnabled,
+            status: m.status,
+            progressPercentage: m.progressPercentage,
+            lastCompletedWaypointIndex: m.lastCompletedWaypointIndex,
+            fieldId: m.fieldId,
+            missionType: sel,
+          );
+        }
       } else {
         missionToSave = await _createMission(
           preserveCurrentIdentity: didForkFromHistory,
-          pointsOverride: hasOutlineForRegen,
+          pointsOverride: regenOutline,
         );
         if (missionToSave != null) {
           final altitude =
@@ -1254,7 +1426,7 @@ class _MapViewState extends State<MapView> {
         }
       }
     } else if (existingMission != null) {
-      final outline = _missionOutlineForSummary(existingMission);
+      final outline = await _fieldBoundaryHullForMission(existingMission);
       final type = _droneService.selectedMissionType;
       final regenFromOutline = outline.length >= 3 &&
           (type == 'dense_inspection' ||
@@ -1311,14 +1483,55 @@ class _MapViewState extends State<MapView> {
           progressPercentage: existingMission.progressPercentage,
           lastCompletedWaypointIndex:
               existingMission.lastCompletedWaypointIndex,
+          fieldId: existingMission.fieldId,
+          missionType: type,
         );
       }
     }
 
     if (missionToSave != null) {
+      var m = missionToSave;
+      // Fork from history (e.g. mission type change) still keeps the same field
+      // when the drawn outline was not edited.
+      final reuseField =
+          existingMission != null && !_droneService.fieldOutlineEdited;
+      late String fieldId;
+      if (reuseField) {
+        fieldId = existingMission.fieldId;
+      } else {
+        final hull = await _boundaryVerticesForField(m);
+        if (hull.length < 3) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Need at least 3 boundary points to save a new field'),
+            ),
+          );
+          return;
+        }
+        final name = await _promptNewFieldName();
+        if (name == null || name.trim().isEmpty) return;
+        fieldId = 'field_${DateTime.now().millisecondsSinceEpoch}';
+        final now = DateTime.now();
+        final area = MissionStorage.computeOutlineAreaM2(hull);
+        await _missionStorage.saveField(Field(
+          id: fieldId,
+          name: name.trim(),
+          boundary: hull,
+          areaSquareMeters: area,
+          createdAt: now,
+          updatedAt: now,
+        ));
+      }
+      m = m.copyWith(
+        fieldId: fieldId,
+        missionType: _droneService.selectedMissionType,
+      );
+
       // Save to storage (will replace if ID exists)
       try {
-        await _missionStorage.saveMission(missionToSave);
+        await _missionStorage.saveMission(m);
       } catch (e) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to save mission: $e')),
@@ -1326,9 +1539,10 @@ class _MapViewState extends State<MapView> {
         return;
       }
 
-      _droneService.setMission(missionToSave, fromHistory: false);
+      _droneService.setMission(m, fromHistory: false);
+      _scheduleRefreshFieldBoundary();
       try {
-        await _droneService.uploadMissionToAutopilot(missionToSave);
+        await _droneService.uploadMissionToAutopilot(m);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(

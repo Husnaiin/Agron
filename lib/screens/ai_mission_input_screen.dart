@@ -90,6 +90,7 @@ class _AIMissionInputScreenState extends State<AIMissionInputScreen> {
         defaultAltitude: 50.0,
         defaultSprayRate: 1.0,
         defaultSpeed: 5.0,
+        missionType: isSprayMission ? 'spraying' : 'inspection',
       );
 
       setState(() => _isGenerating = false);

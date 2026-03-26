@@ -129,10 +129,21 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildMissionCard(Mission mission) {
-    final area = _calculateArea(mission.waypoints.map((w) => w.position).toList());
-    final acres = area / 4046.86;
+  String _typeLabel(String t) {
+    switch (t) {
+      case 'dense_inspection':
+        return 'Dense inspection';
+      case 'dimr':
+        return 'DIMR';
+      case 'spraying':
+        return 'Spraying';
+      case 'inspection':
+      default:
+        return 'Inspection';
+    }
+  }
 
+  Widget _buildMissionCard(Mission mission) {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: ListTile(
@@ -143,6 +154,7 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text('Type: ${_typeLabel(mission.missionType)}'),
             if (mission.isScheduled && mission.scheduledAt != null)
               Row(
                 children: [
@@ -184,7 +196,6 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
                 ),
               ],
             ),
-            Text('Area: ${acres.toStringAsFixed(2)} acres'),
             Text('Waypoints: ${mission.waypoints.length}'),
           ],
         ),
@@ -365,19 +376,6 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
     });
   }
 
-  double _calculateArea(List<LatLng> points) {
-    if (points.length < 3) return 0;
-
-    double area = 0;
-    for (int i = 0; i < points.length; i++) {
-      int j = (i + 1) % points.length;
-      area += points[i].latitude * points[j].longitude;
-      area -= points[j].latitude * points[i].longitude;
-    }
-    area = area.abs() * 111319.9 * 111319.9 / 2;
-    return area;
-  }
-
   void _startMission(Mission mission, {bool isResume = false}) {
     final droneService = context.read<DroneService>();
     droneService.setMission(mission, fromHistory: true);
@@ -424,8 +422,6 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
   }
 
   void _showMissionInfo(BuildContext context, Mission mission) {
-    final area = _calculateArea(mission.waypoints.map((w) => w.position).toList());
-    final acres = area / 4046.86;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -437,6 +433,7 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text('Type: ${_typeLabel(mission.missionType)}'),
                 Text('Created: ${DateFormat.yMMMd().add_jm().format(mission.createdAt)}'),
                 if (mission.scheduledAt != null)
                   Text(
@@ -445,8 +442,6 @@ class _MissionScreenState extends State<MissionScreen> with SingleTickerProvider
                   ),
                 if (mission.completedAt != null)
                   Text('Completed: ${DateFormat.yMMMd().add_jm().format(mission.completedAt!)}'),
-                const SizedBox(height: 8),
-                Text('Area: ${acres.toStringAsFixed(2)} acres'),
                 const SizedBox(height: 12),
                 const Text('Waypoints:', style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),

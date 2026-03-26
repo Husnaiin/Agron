@@ -7,7 +7,7 @@ import 'package:agron_gcs/widgets/map_view.dart';
 import 'package:agron_gcs/widgets/telemetry_panel.dart';
 import 'package:agron_gcs/widgets/mission_controls.dart';
 import 'package:agron_gcs/services/drone_service.dart';
-import 'package:agron_gcs/screens/mission_screen.dart';
+import 'package:agron_gcs/screens/fields_screen.dart';
 import 'package:agron_gcs/screens/auth/login_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -72,7 +72,7 @@ class HomeScreen extends StatelessWidget {
                 ),
                 IconButton(
                   icon: Icon(
-                    Icons.history,
+                    Icons.crop_square,
                     color: Theme.of(context).brightness == Brightness.light
                         ? Colors.black
                         : Colors.white,
@@ -81,10 +81,10 @@ class HomeScreen extends StatelessWidget {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (context) => const MissionScreen()),
+                          builder: (context) => const FieldsScreen()),
                     );
                   },
-                  tooltip: 'Mission History',
+                  tooltip: 'Fields & missions',
                 ),
                 IconButton(
                   icon: Icon(
@@ -105,14 +105,7 @@ class HomeScreen extends StatelessWidget {
                         ? Colors.black
                         : Colors.white,
                   ),
-                  onPressed: () {
-                    Provider.of<AuthProvider>(context, listen: false).logout();
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const LoginScreen()),
-                    );
-                  },
+                  onPressed: () => _confirmLogout(context),
                   tooltip: 'Logout',
                 ),
               ],
@@ -138,6 +131,35 @@ class HomeScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _confirmLogout(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text(
+          'You will need to sign in again to access your fields and synced data.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && context.mounted) {
+      Provider.of<AuthProvider>(context, listen: false).logout();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+      );
+    }
   }
 
   void _showConnectionDialog(BuildContext context, DroneService droneService) {

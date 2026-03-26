@@ -52,14 +52,14 @@ class NotificationService {
 
     await _notifications.zonedSchedule(
       mission.id.hashCode, // Use mission ID as notification ID
-      '🚁 Mission Reminder',
-      'Mission "${mission.name}" starts in 30 minutes at ${_formatTime(mission.scheduledAt!)}',
+      '🚁 Survey reminder',
+      '"${mission.name}" starts in 30 minutes at ${_formatTime(mission.scheduledAt!)}',
       scheduledDate,
       NotificationDetails(
         android: AndroidNotificationDetails(
           'mission_reminders',
-          'Mission Reminders',
-          channelDescription: 'Notifications for scheduled drone missions',
+          'Survey reminders',
+          channelDescription: 'Reminders for scheduled field surveys (from your synced plans)',
           importance: Importance.high,
           priority: Priority.high,
           icon: '@mipmap/ic_launcher',

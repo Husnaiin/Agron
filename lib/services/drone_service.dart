@@ -34,8 +34,8 @@ class DroneService extends ChangeNotifier {
   bool _isMissionFromHistory = false;
   /// True after the user changes type, targets, or map geometry while a history mission is loaded.
   bool _historyMissionEdited = false;
-  /// Mission type selected when a history mission was loaded (baseline for "edited" detection).
-  String _baselineMissionTypeWhenHistoryLoaded = 'inspection';
+  /// True after the user changes the drawn outline / corner points (new field on save).
+  bool _fieldOutlineEdited = false;
   /// Incremented when a mission is loaded from history so the map can clear local draw state.
   int _missionReplaceToken = 0;
   double? _targetAltitude;
@@ -55,6 +55,7 @@ class DroneService extends ChangeNotifier {
   bool get isMissionUploaded => _isMissionUploaded;
   bool get isMissionFromHistory => _isMissionFromHistory;
   bool get historyMissionEdited => _historyMissionEdited;
+  bool get fieldOutlineEdited => _fieldOutlineEdited;
   int get missionReplaceToken => _missionReplaceToken;
   double? get targetAltitude => _targetAltitude;
   double? get targetSpeed => _targetSpeed;
@@ -63,6 +64,13 @@ class DroneService extends ChangeNotifier {
   void markHistoryMissionEdited() {
     if (_currentMission == null) return;
     _historyMissionEdited = true;
+    _isMissionUploaded = false;
+    notifyListeners();
+  }
+
+  void markFieldOutlineEdited() {
+    if (_currentMission == null) return;
+    _fieldOutlineEdited = true;
     _isMissionUploaded = false;
     notifyListeners();
   }
@@ -81,8 +89,10 @@ class DroneService extends ChangeNotifier {
     if (_selectedMissionType == type) return;
     _selectedMissionType = type;
     _isMissionUploaded = false;
-    if (_isMissionFromHistory && type != _baselineMissionTypeWhenHistoryLoaded) {
-      _historyMissionEdited = true;
+    // Do not mark history "edited" on type alone — clone behavior: save keeps
+    // stored waypoints unless map geometry changes; dense regen uses Field boundary.
+    if (_currentMission != null) {
+      _currentMission = _currentMission!.copyWith(missionType: type);
     }
     notifyListeners();
   }
@@ -98,7 +108,9 @@ class DroneService extends ChangeNotifier {
     _currentMission = mission;
     _isMissionFromHistory = fromHistory;
     _historyMissionEdited = false;
+    _fieldOutlineEdited = false;
     _isMissionUploaded = false;
+    _selectedMissionType = mission.missionType;
     // New or replaced mission: clear map draw state on the home screen.
     if (fromHistory || prevId != mission.id) {
       _missionReplaceToken++;
@@ -106,7 +118,6 @@ class DroneService extends ChangeNotifier {
     if (fromHistory) {
       _targetAltitude = mission.defaultAltitude;
       _targetSpeed = mission.defaultSpeed;
-      _baselineMissionTypeWhenHistoryLoaded = _selectedMissionType;
     }
     notifyListeners();
   }
@@ -117,6 +128,7 @@ class DroneService extends ChangeNotifier {
     _currentMission = null;
     _isMissionFromHistory = false;
     _historyMissionEdited = false;
+    _fieldOutlineEdited = false;
     _isMissionUploaded = false;
     _missionReplaceToken++;
     notifyListeners();
@@ -149,11 +161,52 @@ class DroneService extends ChangeNotifier {
       status: MissionStatus.pending,
       progressPercentage: 0,
       lastCompletedWaypointIndex: -1,
+      fieldId: m.fieldId,
+      missionType: m.missionType,
     );
     _isMissionFromHistory = false;
     _historyMissionEdited = false;
     _isMissionUploaded = false;
     notifyListeners();
+  }
+
+  /// True if [p] lies strictly inside convex [poly] (CCW or CW), lon/lat plane.
+  bool _pointStrictlyInsideConvexPoly(LatLng p, List<LatLng> poly) {
+    if (poly.length < 3) return false;
+    double cross(LatLng a, LatLng b, LatLng q) {
+      return (b.longitude - a.longitude) * (q.latitude - a.latitude) -
+          (b.latitude - a.latitude) * (q.longitude - a.longitude);
+    }
+
+    bool? positive;
+    for (int i = 0; i < poly.length; i++) {
+      final a = poly[i];
+      final b = poly[(i + 1) % poly.length];
+      final cr = cross(a, b, p);
+      if (cr.abs() < 1e-11) return false;
+      final isPos = cr > 0;
+      if (positive == null) {
+        positive = isPos;
+      } else if (isPos != positive) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// Inspection missions are saved with the drone position as the first waypoint.
+  /// Excluding it when it sits inside the field hull avoids uploading a "fan" of
+  /// legs through that interior point (Mission Planner shows separate loops to WP1).
+  List<LatLng> _inspectionPositionsForHull(List<LatLng> userPoints) {
+    if (userPoints.length < 4) return userPoints;
+    final first = userPoints.first;
+    final rest = userPoints.sublist(1);
+    if (rest.length < 3) return userPoints;
+    final hullRest = _computeConvexHull(rest);
+    if (hullRest.length >= 3 && _pointStrictlyInsideConvexPoly(first, hullRest)) {
+      return rest;
+    }
+    return userPoints;
   }
 
   // Compute convex hull of points
@@ -452,6 +505,8 @@ class DroneService extends ChangeNotifier {
         createdAt: mission.createdAt,
         completedAt: mission.completedAt,
         status: mission.status,
+        fieldId: mission.fieldId,
+        missionType: mission.missionType,
       ).toJson();
       missionJson['waypoints'] = wireWaypoints;
       if (_wsChannel != null) {
@@ -461,12 +516,12 @@ class DroneService extends ChangeNotifier {
           'defaultAltitude': mission.defaultAltitude,
           'defaultSprayRate': mission.defaultSprayRate,
           'defaultSpeed': mission.defaultSpeed,
-          'mission_type': _selectedMissionType,
+          'mission_type': mission.missionType,
         };
         _wsChannel!.sink.add(json.encode(message));
       } else if (socket != null) {
         final socketMessage = Map<String, dynamic>.from(missionJson);
-        socketMessage['mission_type'] = _selectedMissionType;
+        socketMessage['mission_type'] = mission.missionType;
         socket!.emit('upload_mission', socketMessage);
       } else {
         throw Exception('Not connected to server');
@@ -498,7 +553,7 @@ class DroneService extends ChangeNotifier {
   }
 
   List<MissionWaypoint> _buildEffectiveWaypoints(Mission mission) {
-    final missionType = _selectedMissionType;
+    final missionType = mission.missionType;
     final userPoints = mission.waypoints.map((w) => w.position).toList();
     
     if (userPoints.length < 3) return mission.waypoints;
@@ -510,19 +565,23 @@ class DroneService extends ChangeNotifier {
       return mission.waypoints;
     }
 
-    // For inspection: compute convex hull of user-drawn polygon
+    // For inspection: convex hull of field vertices only (not interior drone prefix).
     if (missionType == 'inspection') {
-      final hull = _computeConvexHull(userPoints);
-      final effective = <MissionWaypoint>[];
-      effective.addAll(hull
-          .map((p) => MissionWaypoint(
-                position: p,
-                altitude: mission.defaultAltitude,
-                sprayRate: mission.defaultSprayRate,
-                sprayEnabled: true,
-              ))
-          .toList());
-      debugPrint('[MISSION] Inspection: using hull with ${effective.length} waypoints');
+      final ringPts = _inspectionPositionsForHull(userPoints);
+      final hull = _computeConvexHull(ringPts);
+      if (hull.length < 3) return mission.waypoints;
+      final effective = hull
+          .map(
+            (p) => MissionWaypoint(
+              position: p,
+              altitude: mission.defaultAltitude,
+              sprayRate: mission.defaultSprayRate,
+              sprayEnabled: true,
+            ),
+          )
+          .toList();
+      debugPrint(
+          '[MISSION] Inspection: hull with ${effective.length} boundary waypoints');
       return effective;
     }
 
@@ -1130,6 +1189,8 @@ Timestamp: ${telemetry.timestamp}
         createdAt: missionToStart.createdAt,
         completedAt: missionToStart.completedAt,
         status: missionToStart.status,
+        fieldId: missionToStart.fieldId,
+        missionType: missionToStart.missionType,
       );
       final missionJson = effectiveMission.toJson();
       missionJson['waypoints'] = waypointsToWireList(effectiveWaypoints);
@@ -1146,7 +1207,7 @@ Timestamp: ${telemetry.timestamp}
         // Send mission data to Socket.IO server
         debugPrint('Emitting start_mission event...');
         final socketMessage = Map<String, dynamic>.from(missionJson);
-        socketMessage['mission_type'] = _selectedMissionType;
+        socketMessage['mission_type'] = missionToStart.missionType;
         socket!.emit('start_mission', socketMessage);
 
         // Wait for mission status confirmation
@@ -1166,7 +1227,7 @@ Timestamp: ${telemetry.timestamp}
           'waypoints': missionJson['waypoints'],
           'defaultAltitude': missionToStart.defaultAltitude,
           'defaultSpeed': missionToStart.defaultSpeed,
-          'mission_type': _selectedMissionType,
+          'mission_type': missionToStart.missionType,
         };
         _wsChannel!.sink.add(json.encode(message));
 
