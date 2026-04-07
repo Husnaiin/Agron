@@ -490,11 +490,28 @@ class DroneService extends ChangeNotifier {
     return simplified;
   }
 
+  /// Display name of the field for this mission (for server capture paths). Null if unknown.
+  Future<String?> _fieldNameForMission(Mission mission) async {
+    try {
+      final fields = await _missionStorage.getFields();
+      for (final f in fields) {
+        if (f.id == mission.fieldId) {
+          final n = f.name.trim();
+          return n.isEmpty ? null : n;
+        }
+      }
+    } catch (e) {
+      debugPrint('[MISSION] Field name lookup failed: $e');
+    }
+    return null;
+  }
+
   Future<void> uploadMissionToAutopilot(Mission mission) async {
     try {
       // Derive waypoints per mission type on-the-fly
       final effectiveWaypoints = _buildEffectiveWaypoints(mission);
       final wireWaypoints = waypointsToWireList(effectiveWaypoints);
+      final fieldName = await _fieldNameForMission(mission);
       final missionJson = Mission(
         id: mission.id,
         name: mission.name,
@@ -510,7 +527,7 @@ class DroneService extends ChangeNotifier {
       ).toJson();
       missionJson['waypoints'] = wireWaypoints;
       if (_wsChannel != null) {
-        final message = {
+        final message = <String, dynamic>{
           'type': 'upload_mission',
           'waypoints': wireWaypoints,
           'defaultAltitude': mission.defaultAltitude,
@@ -518,10 +535,12 @@ class DroneService extends ChangeNotifier {
           'defaultSpeed': mission.defaultSpeed,
           'mission_type': mission.missionType,
         };
+        if (fieldName != null) message['field_name'] = fieldName;
         _wsChannel!.sink.add(json.encode(message));
       } else if (socket != null) {
         final socketMessage = Map<String, dynamic>.from(missionJson);
         socketMessage['mission_type'] = mission.missionType;
+        if (fieldName != null) socketMessage['field_name'] = fieldName;
         socket!.emit('upload_mission', socketMessage);
       } else {
         throw Exception('Not connected to server');
@@ -1178,6 +1197,8 @@ Timestamp: ${telemetry.timestamp}
       
       debugPrint('Starting mission with waypoints: ${effectiveWaypoints.length}');
 
+      final fieldName = await _fieldNameForMission(missionToStart);
+
       // Convert effective mission to JSON
       final effectiveMission = Mission(
         id: missionToStart.id,
@@ -1208,6 +1229,7 @@ Timestamp: ${telemetry.timestamp}
         debugPrint('Emitting start_mission event...');
         final socketMessage = Map<String, dynamic>.from(missionJson);
         socketMessage['mission_type'] = missionToStart.missionType;
+        if (fieldName != null) socketMessage['field_name'] = fieldName;
         socket!.emit('start_mission', socketMessage);
 
         // Wait for mission status confirmation
@@ -1222,13 +1244,14 @@ Timestamp: ${telemetry.timestamp}
       } else if (_wsChannel != null) {
         // Send mission data to WebSocket server
         debugPrint('Sending start_mission via WebSocket...');
-        final message = {
+        final message = <String, dynamic>{
           'type': 'start_mission',
           'waypoints': missionJson['waypoints'],
           'defaultAltitude': missionToStart.defaultAltitude,
           'defaultSpeed': missionToStart.defaultSpeed,
           'mission_type': missionToStart.missionType,
         };
+        if (fieldName != null) message['field_name'] = fieldName;
         _wsChannel!.sink.add(json.encode(message));
 
         // Wait for mission status confirmation

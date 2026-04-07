@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import datetime
 from typing import List, Dict, Any
+import re
 import pathlib
 import shutil
 from asyncio.subprocess import PIPE
@@ -180,12 +181,48 @@ capture_stop_event: asyncio.Event | None = None
 capture_frame_counter: int = 0
 capture_session_counter: int = 0
 
+# Sanitized folder prefix from app (optional). When None, paths match legacy `{day}-{mon}-data-agron` only.
+capture_field_label: str | None = None
+
+
+def _sanitize_field_label_for_path(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    s = re.sub(r"[^a-zA-Z0-9._-]+", "_", s)
+    s = s.strip("._-")
+    if not s:
+        return None
+    return s[:80]
+
+
+def _apply_capture_field_from_message(message: Dict[str, Any]) -> None:
+    """Updates capture path prefix when the client sends `field_name`. If the key is absent, keep prior value (old clients)."""
+    global capture_field_label
+    if "field_name" not in message:
+        return
+    capture_field_label = _sanitize_field_label_for_path(message.get("field_name"))
+    if capture_field_label:
+        print(f"[CAMERA] field_name -> capture path prefix: {capture_field_label}")
+    else:
+        print("[CAMERA] field_name empty/invalid; capture folder uses date suffix only (legacy)")
+
+
 def _compute_capture_dirs() -> tuple[pathlib.Path, pathlib.Path]:
     now = datetime.now()
     day = now.day  # 1..31
     mon = now.strftime("%b").lower()  # jan, feb, mar, ...
-    base = pathlib.Path(f"/home/agron/{day}-{mon}-data-agron")
+    suffix = f"{day}-{mon}-data-agron"
+    label = globals().get("capture_field_label")
+    if label:
+        folder = f"{label}_{suffix}"
+    else:
+        folder = suffix
+    base = pathlib.Path(f"/home/agron/{folder}")
     return base / "noir", base / "rgb"
+
 
 NOIR_DIR, RGB_DIR = _compute_capture_dirs()
 
@@ -354,10 +391,12 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
     global drone_latitude, drone_longitude
     global capture_task, capture_stop_event
     global mission_type, total_waypoints, rtl_triggered_by_battery, capture_frame_counter, capture_session_counter
-    
+    global NOIR_DIR, RGB_DIR
+
     msg_type = message.get("type")
-    
+
     if msg_type == "start_mission":
+        _apply_capture_field_from_message(message)
         print("Starting mission with data:", json.dumps(message, indent=2))
         
         if "waypoints" in message:
@@ -484,6 +523,8 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
 
     elif msg_type == "start_capture":
         print("[CAMERA] Received start_capture command")
+        NOIR_DIR, RGB_DIR = _compute_capture_dirs()
+        print(f"[CAMERA] Using NOIR_DIR={NOIR_DIR}, RGB_DIR={RGB_DIR}")
         if capture_task and not capture_task.done():
             print("[CAMERA] Capture already running")
         else:
@@ -507,7 +548,8 @@ async def handle_client_message(websocket: WebSocket, message: Dict[str, Any]):
         await broadcast_message({"type": "camera_status", "status": "capture_stopped"})
 
     elif msg_type == "upload_mission":
-        # Expected payload: { "type": "upload_mission", "waypoints": [ {"latitude": .., "longitude": ..}, ... ], "mission_type": "dimr" }
+        _apply_capture_field_from_message(message)
+        # Expected payload: { "type": "upload_mission", "waypoints": [ {"latitude": .., "longitude": ..}, ... ], "mission_type": "dimr", "field_name": optional }
         if mavutil is None:
             await websocket.send_json({"type": "mission_status", "status": "error", "message": "pymavlink not installed"})
             return
@@ -1357,7 +1399,7 @@ async def generate_telemetry():
 
         if is_mission_active:
             print(f"telem: lat={lat_out}, lon={lon_out}, batt={drone_battery}% ({battery_voltage_v:.2f}V), progress={mission_progress}%, wp={current_waypoint_index}/{total_waypoints}")
-            await broadcast_message(telemetry)
+        await broadcast_message(telemetry)
         
         await asyncio.sleep(1)
 
