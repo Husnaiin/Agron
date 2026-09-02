@@ -49,48 +49,48 @@ A cross-platform Ground Control Station (GCS) application for agricultural drone
 
 Agron is three cooperating parts: a Flutter app the operator flies from, a
 FastAPI server on a Raspberry Pi that owns the MAVLink link, and the Pixhawk
-autopilot on the aircraft. The app is offline-first — missions are planned,
+autopilot on the aircraft. The app is offline-first: missions are planned,
 saved, and resumed locally, and synced to Firebase when a connection is
 available.
 
 ```mermaid
 flowchart TB
-    subgraph PHONE["Mobile app — Flutter GCS"]
-        UI["Screens<br/>Home / Fields / Mission / Chat / Profile"]
+    subgraph PHONE["Mobile app - Flutter GCS"]
+        UI["Screens<br/>Home, Fields, Mission, Chat, Profile"]
         MV["map_view widget<br/>draw the field, preview the coverage path"]
-        DS["DroneService — ChangeNotifier<br/>WebSocket client, auto-reconnect,<br/>mission + progress state"]
-        MST["MissionStorage<br/>SharedPreferences cache + Firestore sync"]
-        AIP["AIMissionPlanner<br/>text / voice description to waypoints"]
+        DS["DroneService, a ChangeNotifier<br/>WebSocket client, auto-reconnect<br/>mission and progress state"]
+        MST["MissionStorage<br/>SharedPreferences cache plus Firestore sync"]
+        AIP["AIMissionPlanner<br/>text or voice description to waypoints"]
         NS["NotificationService<br/>scheduled-mission reminders"]
     end
 
-    subgraph PI["Raspberry Pi — companion computer"]
-        SRV["server1.py — FastAPI + uvicorn<br/>/ws/telemetry, /status, /waypoints"]
+    subgraph PI["Raspberry Pi - companion computer"]
+        SRV["server1.py, FastAPI on uvicorn<br/>ws telemetry, status, waypoints endpoints"]
         QUEUE["Persistent message queue<br/>RTL and status events saved to disk"]
-        CAM["rpicam-still<br/>dual capture, RGB + NIR, geotagged"]
+        CAM["rpicam-still<br/>dual capture RGB and NIR, geotagged"]
         MAV["pymavlink master<br/>MAVLink over serial"]
     end
 
     subgraph AIR["Aircraft"]
-        PX["Pixhawk autopilot<br/>GUIDED / AUTO / RTL, mission items"]
+        PX["Pixhawk autopilot<br/>GUIDED, AUTO, RTL, mission items"]
         BATT["6S LiPo pack<br/>voltage via SYS_STATUS"]
     end
 
     GEM["Google Gemini API"]
-    FB["Firebase<br/>Auth + Firestore"]
+    FB["Firebase<br/>Auth and Firestore"]
 
     UI --> MV --> DS
     UI --> MST
     UI --> AIP --> GEM
     UI --> NS
-    DS <-->|"JSON over WebSocket<br/>telemetry and commands"| SRV
-    MST <-->|"offline-first sync"| FB
+    DS <-->|telemetry and commands over WebSocket| SRV
+    MST <-->|offline-first sync| FB
     SRV --- QUEUE
     SRV --> CAM
-    SRV <-->|"MAVLink"| MAV
+    SRV <-->|MAVLink| MAV
     MAV --> PX
     BATT --> PX
-    PX -->|"SYS_STATUS / GLOBAL_POSITION_INT / VFR_HUD"| MAV
+    PX -->|telemetry messages| MAV
 
     style DS fill:#1f6feb,color:#fff
     style SRV fill:#8250df,color:#fff
@@ -107,28 +107,28 @@ sequenceDiagram
     participant M as pymavlink
     participant P as Pixhawk
 
-    U->>A: draw field, choose type — Inspection / Spraying / Dense / DIMR
+    U->>A: draw field, choose type (Inspection, Spraying, Dense, DIMR)
     A->>A: generate coverage waypoints, save locally and to Firebase
     U->>A: Upload mission
     A->>S: upload_mission with the waypoint list
-    S->>M: MISSION_ITEM_INT sequence — TAKEOFF, WAYPOINT..., RTL
+    S->>M: MISSION_ITEM_INT sequence (TAKEOFF, WAYPOINTs, RTL)
     M->>P: upload items, wait for MISSION_ACK
     U->>A: Start
     A->>S: start_mission
-    S->>M: arm, GUIDED takeoff to 20 m, then AUTO + MISSION_START
+    S->>M: arm, GUIDED takeoff to 20 m, then AUTO and MISSION_START
 
     loop about 1 Hz while flying
-        P-->>M: SYS_STATUS / GLOBAL_POSITION_INT / VFR_HUD
+        P-->>M: SYS_STATUS, GLOBAL_POSITION_INT, VFR_HUD
         M-->>S: parsed telemetry
-        S-->>A: telemetry — lat, lon, alt, battery percent, waypoint index
+        S-->>A: telemetry (lat, lon, alt, battery percent, waypoint index)
         A->>A: update map and progress, persist the waypoint index
     end
 
     alt DIMR mission and battery at or below 90 percent
         S->>M: set mode RTL
         S-->>A: mission_status rtl_battery_low, with saved progress
-        A->>A: store progress; queued so it survives a disconnect
-        Note over U,A: later, Resume from Mission History sends only the remaining waypoints
+        A->>A: store progress, queued so it survives a disconnect
+        Note over U,A: later, Resume from history sends only the remaining waypoints
     else mission finishes
         S-->>A: mission_status complete
     end
